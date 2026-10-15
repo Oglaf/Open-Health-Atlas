@@ -2,6 +2,7 @@
 
 A tiny in-process stub broker stands in for deploy/hermes-bridge here; focused
 tests exercise request validation and Unix peer-credential handling."""
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
@@ -13,10 +14,22 @@ import threading
 import time
 
 import pytest
+from flask import g
 
 from app import bridge, create_app
 from app.panel_db import get_db
 from deploy.bridge_commands import COMMAND_FLAGS
+
+
+@contextmanager
+def _owner_context(app):
+    """These unit tests exercise bridge.run()'s own client-side logic
+    directly, outside a real logged-in request — push the user a real
+    request's require_login would resolve, matching MULTI_USER.md invariant 2
+    (every bridge.run call carries a user; a missing one is an error)."""
+    with app.app_context():
+        g.user_id = "owner"
+        yield
 
 
 def _short_sock():
@@ -210,7 +223,7 @@ def test_phase3_no_value_flag_cannot_hide_a_following_bad_flag(tmp_path):
 
 
 def test_success_returns_parsed_json_and_audits(app):
-    with app.app_context():
+    with _owner_context(app):
         result = bridge.run("day-rating", "green")
     assert result["ok"] is True and result["day_rating"] == 3
     detail = json.loads(_audit_rows(app)[0]["detail"])
@@ -267,21 +280,21 @@ def test_trusted_server_code_can_select_an_isolated_read_only_socket(
 
 
 def test_failure_raises_with_health_py_message(app):
-    with app.app_context():
+    with _owner_context(app):
         with pytest.raises(bridge.BridgeError, match="no portions"):
             bridge.run("eat", "sample-stew")
     assert json.loads(_audit_rows(app)[0]["detail"])["outcome"] == "exit:1"
 
 
 def test_hermesctl_json_error_is_unwrapped_for_the_ui(app):
-    with app.app_context():
+    with _owner_context(app):
         with pytest.raises(bridge.BridgeError, match="^Hermes took too long$"):
             bridge.run("hermes-chat", "--session", "hermes-panel-pain",
                        stdin="hello")
 
 
 def test_structured_health_error_preserves_safe_code_and_message(app):
-    with app.app_context():
+    with _owner_context(app):
         with pytest.raises(bridge.BridgeError, match="input fingerprint changed") as caught:
             bridge.run(
                 "hypothesis-promote",
@@ -299,7 +312,7 @@ def test_transport_error_is_reported_and_audited(tmp_path):
         "PANEL_DB": str(tmp_path / "panel.db"), "PANEL_COOKIE_SECURE": False,
         "BRIDGE_SOCKET": str(tmp_path / "does-not-exist.sock"),
     })
-    with app.app_context():
+    with _owner_context(app):
         with pytest.raises(bridge.BridgeError, match="unavailable"):
             bridge.run("day-rating", "green")
         rows = [dict(r) for r in get_db().execute("SELECT detail FROM audit_log")]

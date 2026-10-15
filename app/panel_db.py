@@ -17,7 +17,27 @@ LEGACY_CONVERSATIONS = {
     "mobility": ("legacy-mobility", "Mobility", "hermes-panel-mobility"),
 }
 
+# The bootstrap identity for an existing single-user install: it keeps the
+# configured HEALTH_DB/VAULT_DIR unchanged (no files move) and owns every
+# pre-migration credential/session/audit row. See docs/MULTI_USER.md.
+BOOTSTRAP_USER_ID = "owner"
+
+# Tables that gain a user_id column in the multi-user migration below.
+USER_SCOPED_TABLES = (
+    "credentials", "sessions", "enroll_tokens", "chat_log",
+    "chat_conversations", "audit_log",
+)
+
 SCHEMA_STATEMENTS = (
+    """CREATE TABLE IF NOT EXISTS users (
+  id           TEXT PRIMARY KEY,
+  display_name TEXT NOT NULL,
+  role         TEXT NOT NULL CHECK(role IN ('admin','member')),
+  status       TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','disabled')),
+  health_db    TEXT,
+  vault_dir    TEXT,
+  created_at   INTEGER NOT NULL
+)""",
     """CREATE TABLE IF NOT EXISTS credentials (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   credential_id BLOB UNIQUE NOT NULL,
@@ -116,6 +136,41 @@ def _legacy_message_context(lens, conversation_id):
     }
 
 
+def _add_column_if_missing(con, table, column, coltype="TEXT"):
+    cols = {row[1] for row in con.execute(f"PRAGMA table_info({table})")}
+    if column not in cols:
+        con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
+
+
+def _migrate_users(con, app) -> None:
+    """Add user_id to every panel table that needs one, then — only if this
+    install already had rows predating this migration — create the bootstrap
+    'owner' user and backfill those rows to it. A fresh installation has no
+    such rows, so `users` starts empty and `flask user-create` is required."""
+    for table in USER_SCOPED_TABLES:
+        _add_column_if_missing(con, table, "user_id")
+    needs_backfill = any(
+        con.execute(f"SELECT 1 FROM {table} WHERE user_id IS NULL LIMIT 1").fetchone()
+        for table in USER_SCOPED_TABLES
+    )
+    if not needs_backfill:
+        return
+    con.execute(
+        "INSERT OR IGNORE INTO users(id, display_name, role, status, health_db,"
+        " vault_dir, created_at) VALUES(?,?,?,?,?,?,?)",
+        (
+            BOOTSTRAP_USER_ID,
+            app.config.get("HERMES_DISPLAY_NAME") or "OpenHealthAtlas user",
+            "admin", "active",
+            app.config.get("HEALTH_DB"), app.config.get("VAULT_DIR"),
+            int(time.time()),
+        ),
+    )
+    for table in USER_SCOPED_TABLES:
+        con.execute(f"UPDATE {table} SET user_id=? WHERE user_id IS NULL",
+                   (BOOTSTRAP_USER_ID,))
+
+
 def init_db(app) -> None:
     """Create and migrate panel-owned state in one short idempotent transaction."""
     con = sqlite3.connect(app.config["PANEL_DB"])
@@ -206,6 +261,11 @@ def init_db(app) -> None:
                     WHERE conversation_id IS NULL""",
                 (legacy_context,),
             )
+        # Runs last: every legacy row this pass may have touched (credentials,
+        # sessions, enroll tokens, and the legacy chat shells just above) is
+        # now in its final pre-migration shape and ready to backfill in one pass.
+        _migrate_users(con, app)
+
         con.execute(
             "INSERT OR IGNORE INTO settings(key,value) VALUES('chat_schema_version',?)",
             (CHAT_SCHEMA_VERSION,),

@@ -43,6 +43,40 @@ def seed_public_submuscle_map(health_db: Path) -> dict:
     return json.loads(completed.stdout)
 
 
+def init_health_database(health_db: Path, vault_dir: Path) -> dict:
+    """Create a fresh, empty health.db + its vault directory and return a
+    report. Shared by the bootstrap install below and `flask user-create`
+    (a new user's own health.db + vault in a multi-user install) — both
+    initialize a health database the exact same way."""
+    if health_db.exists():
+        raise FileExistsError(f"refusing to overwrite existing database: {health_db}")
+    vault_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(vault_dir, 0o700)
+
+    schema = (ROOT / "toolkit" / "SCHEMA.sql").read_text(encoding="utf-8")
+    try:
+        connection = sqlite3.connect(health_db)
+        try:
+            connection.executescript(schema)
+            connection.commit()
+        finally:
+            connection.close()
+        code_version = hashlib.sha1(b"hermes-open-source-init-v1").hexdigest()
+        migrate(str(health_db), AUTONOMOUS_SCHEMA_VERSION, 0, code_version)
+        map_result = seed_public_submuscle_map(health_db)
+        os.chmod(health_db, 0o600)
+    except Exception:
+        health_db.unlink(missing_ok=True)
+        raise
+
+    return {
+        "health_db": str(health_db),
+        "vault_dir": str(vault_dir),
+        "schema_version": AUTONOMOUS_SCHEMA_VERSION,
+        "public_submuscle_rows": map_result["seeded_rows"],
+    }
+
+
 def parser() -> argparse.ArgumentParser:
     default_dir = Path(
         os.environ.get(
@@ -69,23 +103,11 @@ def main() -> int:
         )
 
     data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-    vault_dir.mkdir(exist_ok=True, mode=0o700)
     os.chmod(data_dir, 0o700)
-    os.chmod(vault_dir, 0o700)
 
-    schema = (ROOT / "toolkit" / "SCHEMA.sql").read_text(encoding="utf-8")
     try:
-        connection = sqlite3.connect(health_db)
-        try:
-            connection.executescript(schema)
-            connection.commit()
-        finally:
-            connection.close()
-        code_version = hashlib.sha1(b"hermes-open-source-init-v1").hexdigest()
-        migrate(str(health_db), AUTONOMOUS_SCHEMA_VERSION, 0, code_version)
-        map_result = seed_public_submuscle_map(health_db)
+        result = init_health_database(health_db, vault_dir)
         init_panel_db(SimpleNamespace(config={"PANEL_DB": str(panel_db)}))
-        os.chmod(health_db, 0o600)
         os.chmod(panel_db, 0o600)
     except Exception:
         # Only files created by this invocation are eligible for cleanup.
@@ -96,12 +118,12 @@ def main() -> int:
     print(json.dumps({
         "ok": True,
         "data_dir": str(data_dir),
-        "health_db": str(health_db),
+        "health_db": result["health_db"],
         "panel_db": str(panel_db),
-        "vault_dir": str(vault_dir),
-        "schema_version": AUTONOMOUS_SCHEMA_VERSION,
+        "vault_dir": result["vault_dir"],
+        "schema_version": result["schema_version"],
         "empty": True,
-        "public_submuscle_rows": map_result["seeded_rows"],
+        "public_submuscle_rows": result["public_submuscle_rows"],
     }, sort_keys=True))
     return 0
 

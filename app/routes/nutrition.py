@@ -10,9 +10,9 @@ import json
 import os
 import re
 
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, jsonify, request
 
-from app import bridge, canon, db_read
+from app import bridge, canon, db_read, users
 
 bp = Blueprint("nutrition", __name__, url_prefix="/api/nutrition")
 
@@ -137,7 +137,7 @@ def _recipe_ingredients(rid):
     """
     if not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,159}", rid or ""):
         return [], "invalid"
-    vault = current_app.config.get("VAULT_DIR")
+    vault = users.current_vault_dir()
     if not vault:
         return [], "missing"
     vault = os.path.abspath(vault)

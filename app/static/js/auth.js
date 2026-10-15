@@ -30,7 +30,9 @@
   if (loginBtn) loginBtn.addEventListener("click", async () => {
     try {
       say("Waiting for your passkey…");
-      const opts = await post("/api/auth/login/options");
+      const usernameEl = document.getElementById("login-username");
+      const username = usernameEl && usernameEl.value.trim();
+      const opts = await post("/api/auth/login/options", username ? { username } : {});
       const pk = opts; // py_webauthn options JSON
       pk.challenge = b2buf(pk.challenge);
       (pk.allowCredentials || []).forEach(c => { c.id = b2buf(c.id); });

@@ -44,6 +44,17 @@ AUDIT = os.environ.get("BRIDGE_AUDIT", "/var/lib/hermes/audit/bridge.jsonl")
 SOCK = os.environ.get("BRIDGE_SOCK", "/run/hermes-bridge/bridge.sock")
 TIMEOUT = int(os.environ.get("BRIDGE_TIMEOUT", "60"))
 MAX_ARGS = 40
+
+# Multi-user (see docs/MULTI_USER.md): when BRIDGE_USERS_ROOT is unset, the
+# broker behaves exactly as a single-user install always has — `user` is
+# ignored and the child inherits this process's own HEALTH_DB/HEALTH_VAULT.
+# When it IS set, every request must name a real identity: the legacy
+# bootstrap owner (BRIDGE_OWNER_USER) maps to that same unchanged env; any
+# other id is resolved under the root and the child gets that user's own
+# HEALTH_DB/HEALTH_VAULT instead.
+BRIDGE_USERS_ROOT = os.environ.get("BRIDGE_USERS_ROOT")
+BRIDGE_OWNER_USER = os.environ.get("BRIDGE_OWNER_USER", "owner")
+USER_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}\Z")
 # The request is one newline-terminated JSON line. A 500k-char note (health.py's
 # cap) can inflate heavily once JSON-escaped (astral chars -> \uXXXX surrogate
 # pairs ≈ 12 bytes/char), so size the line limit for that worst case + overhead.
@@ -226,6 +237,29 @@ def _phase5_values(subcmd, args):
     return None
 
 
+def _resolve_user_env(user):
+    """Child-process env overlay for `user`'s health.db/vault, or None to
+    refuse the request. `{}` means "use the broker's own configured
+    HEALTH_DB/HEALTH_VAULT unchanged" (the legacy owner, or any request at
+    all when multi-user mode is off) — never a per-user override."""
+    if not BRIDGE_USERS_ROOT:
+        return {} if user is None or user == BRIDGE_OWNER_USER else None
+    if user == BRIDGE_OWNER_USER:
+        return {}
+    if user is None or not USER_ID_RE.fullmatch(user):
+        return None
+    root = os.path.realpath(BRIDGE_USERS_ROOT)
+    user_dir = os.path.realpath(os.path.join(root, user))
+    if user_dir == root or os.path.commonpath([root, user_dir]) != root:
+        return None  # traversal, or a symlink escaping the configured root
+    if not os.path.isdir(user_dir):
+        return None  # unknown user: never silently create a database for it
+    return {
+        "HEALTH_DB": os.path.join(user_dir, "health.db"),
+        "HEALTH_VAULT": os.path.join(user_dir, "vault"),
+    }
+
+
 def _validate(subcmd, args):
     if subcmd not in ALLOWED:
         return f"subcommand not allowed via the bridge: {subcmd}"
@@ -366,7 +400,7 @@ def _chat_audit(stdin):
     }
 
 
-def handle(subcmd, args, peer_uid, stdin=None):
+def handle(subcmd, args, peer_uid, stdin=None, user=None):
     argv = [subcmd, *args]
     audit_argv = _audit_argv(subcmd, args)   # --why/--note values never verbatim
     ts = time.strftime("%Y-%m-%dT%H:%M:%S")
@@ -376,10 +410,16 @@ def handle(subcmd, args, peer_uid, stdin=None):
         err = _analysis_request(stdin)
     if err is None and subcmd == "analysis-job-status" and stdin is not None:
         err = "analysis job status accepts no stdin"
+    env_overlay = None
+    if err is None:
+        env_overlay = _resolve_user_env(user)
+        if env_overlay is None:
+            err = f"unknown or invalid user: {user!r}"
     if err is not None:
         # Refusals are audited too (ARCHITECTURE.md: "every call, including refused").
         try:
-            _audit({"ts": ts, "uid": peer_uid, "argv": audit_argv, "phase": "refused", "error": err})
+            _audit({"ts": ts, "uid": peer_uid, "user": user, "argv": audit_argv,
+                    "phase": "refused", "error": err})
         except OSError:
             pass
         return {"ok": False, "code": 2, "stdout": "", "stderr": err}
@@ -388,7 +428,7 @@ def handle(subcmd, args, peer_uid, stdin=None):
     # so a committed write can never lack an audit record. stdin (note content)
     # is logged only by byte-length + a sha256, never verbatim — enough to later
     # verify WHICH content was written without leaking it.
-    intent = {"ts": ts, "uid": peer_uid, "argv": audit_argv, "phase": "intent"}
+    intent = {"ts": ts, "uid": peer_uid, "user": user, "argv": audit_argv, "phase": "intent"}
     if stdin is not None and subcmd == "hermes-chat":
         intent.update(_chat_audit(stdin))
     elif stdin is not None:
@@ -406,8 +446,9 @@ def handle(subcmd, args, peer_uid, stdin=None):
     else:
         exec_argv = [sys.executable, HEALTH, *argv]
     tmo = TIMEOUTS.get(subcmd, TIMEOUT)
+    child_env = {**os.environ, **env_overlay} if env_overlay else None
     try:
-        p = subprocess.run(exec_argv, input=stdin,
+        p = subprocess.run(exec_argv, input=stdin, env=child_env,
                            capture_output=True, text=True, timeout=tmo)
         code, stdout, stderr = p.returncode, p.stdout, p.stderr
     except subprocess.TimeoutExpired:
@@ -430,7 +471,7 @@ def handle(subcmd, args, peer_uid, stdin=None):
     # committed write into a reported failure.
     try:
         _audit({"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "uid": peer_uid,
-                "argv": audit_argv, "phase": "result", "code": code})
+                "user": user, "argv": audit_argv, "phase": "result", "code": code})
     except OSError:
         pass
     return {"ok": code == 0, "code": code, "stdout": stdout, "stderr": stderr}
@@ -462,11 +503,14 @@ class Handler(socketserver.StreamRequestHandler):
             stdin = req.get("stdin")
             if stdin is not None:
                 stdin = str(stdin)
+            user = req.get("user")
+            if user is not None:
+                user = str(user)
         except (ValueError, KeyError, TypeError):
             self._send({"ok": False, "code": 1, "stdout": "",
                         "stderr": "malformed request"})
             return
-        self._send(handle(subcmd, args, peer_uid, stdin))
+        self._send(handle(subcmd, args, peer_uid, stdin, user))
 
     def _send(self, obj):
         self.wfile.write((json.dumps(obj) + "\n").encode("utf-8"))
@@ -488,6 +532,30 @@ class Server(socketserver.ThreadingUnixStreamServer):
         os.chmod(SOCK, 0o660)
 
 
+def _worker_targets():
+    """env overlays the background worker drains per tick: this process's
+    own env unchanged (the legacy owner, or the only target in single-user
+    mode) plus every configured user directory — so a non-owner's analysis
+    jobs (queued, per request, under their own health.db) are not silently
+    stuck forever on a worker that only ever polled the owner's database."""
+    targets = [{}]
+    if BRIDGE_USERS_ROOT and os.path.isdir(BRIDGE_USERS_ROOT):
+        try:
+            names = sorted(os.listdir(BRIDGE_USERS_ROOT))
+        except OSError:
+            names = []
+        for name in names:
+            if name == BRIDGE_OWNER_USER or not USER_ID_RE.fullmatch(name):
+                continue
+            health_db = os.path.join(BRIDGE_USERS_ROOT, name, "health.db")
+            if os.path.isfile(health_db):
+                targets.append({
+                    "HEALTH_DB": health_db,
+                    "HEALTH_VAULT": os.path.join(BRIDGE_USERS_ROOT, name, "vault"),
+                })
+    return targets
+
+
 def _analysis_worker():
     """Existing broker's bounded worker; durable queue and locks live in toolkit."""
     audited = False
@@ -498,40 +566,46 @@ def _analysis_worker():
         _JOB_WAKE.clear()
         processed = False
         if os.path.isfile(HEALTH):
-            try:
-                # Fail closed before starting any queued work. No private
-                # request/result content is copied into broker worker logs.
-                if not audited:
-                    _audit({"ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
-                            "phase": "analysis-worker-intent"})
-                    audited = True
-                child = subprocess.Popen(
-                    [sys.executable, HEALTH, "analysis-job-work"],
-                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                )
-                deadline = time.monotonic() + OUTCOME_ANALYSIS_TIMEOUT + 20
-                while child.poll() is None:
-                    if _JOB_STOP.wait(0.25) or time.monotonic() > deadline:
-                        child.terminate()
+            for overlay in _worker_targets():
+                if _JOB_STOP.is_set():
+                    break
+                try:
+                    # Fail closed before starting any queued work. No private
+                    # request/result content is copied into broker worker logs.
+                    if not audited:
+                        _audit({"ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                                "phase": "analysis-worker-intent"})
+                        audited = True
+                    child_env = {**os.environ, **overlay} if overlay else None
+                    child = subprocess.Popen(
+                        [sys.executable, HEALTH, "analysis-job-work"],
+                        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                        stderr=subprocess.DEVNULL, env=child_env,
+                    )
+                    deadline = time.monotonic() + OUTCOME_ANALYSIS_TIMEOUT + 20
+                    while child.poll() is None:
+                        if _JOB_STOP.wait(0.25) or time.monotonic() > deadline:
+                            child.terminate()
+                            try:
+                                child.wait(timeout=3)
+                            except subprocess.TimeoutExpired:
+                                child.kill()
+                                child.wait()
+                            break
+                    with child.stdout:
+                        raw = child.stdout.read(257)
+                    if child.returncode == 0 and len(raw) <= 256:
                         try:
-                            child.wait(timeout=3)
-                        except subprocess.TimeoutExpired:
-                            child.kill()
-                            child.wait()
-                        break
-                with child.stdout:
-                    raw = child.stdout.read(257)
-                if child.returncode == 0 and len(raw) <= 256:
-                    try:
-                        result = json.loads(raw)
-                        processed = (isinstance(result, dict)
-                                     and set(result) == {"ok", "processed"}
-                                     and result["ok"] is True
-                                     and result["processed"] is True)
-                    except (ValueError, TypeError):
-                        pass
-            except OSError:
-                pass
+                            result = json.loads(raw)
+                            if (isinstance(result, dict)
+                                    and set(result) == {"ok", "processed"}
+                                    and result["ok"] is True
+                                    and result["processed"] is True):
+                                processed = True
+                        except (ValueError, TypeError):
+                            pass
+                except OSError:
+                    pass
         if not processed:
             # Submissions wake immediately. Periodic recovery covers direct
             # toolkit submissions and surviving children after broker restart.

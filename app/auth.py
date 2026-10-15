@@ -16,7 +16,7 @@ import time
 
 from flask import current_app, g, request
 
-from app.panel_db import get_db
+from app.panel_db import BOOTSTRAP_USER_ID, get_db
 
 SESSION_COOKIE = "panel_session"
 SESSION_TTL_SECONDS = 12 * 3600
@@ -39,21 +39,27 @@ def _hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def audit(event: str, detail: str = "") -> None:
+def audit(event: str, detail: str = "", user_id: str | None = None) -> None:
+    if user_id is None:
+        user_id = g.get("user_id")
     db = get_db()
-    db.execute("INSERT INTO audit_log(ts, event, detail) VALUES(?,?,?)",
-               (int(time.time()), event, detail))
+    db.execute("INSERT INTO audit_log(ts, event, detail, user_id) VALUES(?,?,?,?)",
+               (int(time.time()), event, detail, user_id))
     db.commit()
 
 
 # ---------------------------------------------------------------- sessions
-def create_session() -> str:
+def create_session(user_id: str = BOOTSTRAP_USER_ID) -> str:
+    if user_id == BOOTSTRAP_USER_ID:
+        from app.users import ensure_bootstrap_user
+        ensure_bootstrap_user()
     token = secrets.token_urlsafe(32)
     now = int(time.time())
     db = get_db()
     db.execute(
-        "INSERT INTO sessions(token_hash, created_at, expires_at, last_seen_at) VALUES(?,?,?,?)",
-        (_hash(token), now, now + SESSION_TTL_SECONDS, now),
+        "INSERT INTO sessions(token_hash, created_at, expires_at, last_seen_at, user_id)"
+        " VALUES(?,?,?,?,?)",
+        (_hash(token), now, now + SESSION_TTL_SECONDS, now, user_id),
     )
     db.commit()
     return token
@@ -107,21 +113,30 @@ def clear_session_cookie(resp):
 
 
 # ---------------------------------------------------------- enrollment tokens
-def new_enroll_token() -> str:
+def new_enroll_token(user_id: str = BOOTSTRAP_USER_ID) -> str:
+    if user_id == BOOTSTRAP_USER_ID:
+        from app.users import ensure_bootstrap_user
+        ensure_bootstrap_user()
     token = secrets.token_urlsafe(24)
     db = get_db()
-    db.execute("INSERT INTO enroll_tokens(token_hash, expires_at) VALUES(?,?)",
-               (_hash(token), int(time.time()) + ENROLL_TTL_SECONDS))
+    db.execute("INSERT INTO enroll_tokens(token_hash, expires_at, user_id) VALUES(?,?,?)",
+               (_hash(token), int(time.time()) + ENROLL_TTL_SECONDS, user_id))
     db.commit()
     return token
 
 
 def enroll_token_valid(token: str) -> bool:
+    return enroll_token_user(token) is not None
+
+
+def enroll_token_user(token: str):
+    """The user_id a live (unused, unexpired) enrollment token was issued
+    for, or None. A single lookup serves both validity checks and routing."""
     row = get_db().execute(
-        "SELECT 1 FROM enroll_tokens WHERE token_hash=? AND used=0 AND expires_at>?",
+        "SELECT user_id FROM enroll_tokens WHERE token_hash=? AND used=0 AND expires_at>?",
         (_hash(token), int(time.time())),
     ).fetchone()
-    return row is not None
+    return row["user_id"] if row else None
 
 
 def consume_enroll_token(token: str) -> None:
@@ -132,18 +147,26 @@ def consume_enroll_token(token: str) -> None:
 
 # ------------------------------------------------------------- credentials
 def store_credential(credential_id: bytes, public_key: bytes, sign_count: int,
-                     transports: str, label: str) -> None:
+                     transports: str, label: str,
+                     user_id: str = BOOTSTRAP_USER_ID) -> None:
     db = get_db()
     db.execute(
-        "INSERT INTO credentials(credential_id, public_key, sign_count, transports, label, created_at)"
-        " VALUES(?,?,?,?,?,?)",
-        (credential_id, public_key, sign_count, transports, label, int(time.time())),
+        "INSERT INTO credentials(credential_id, public_key, sign_count, transports,"
+        " label, created_at, user_id) VALUES(?,?,?,?,?,?,?)",
+        (credential_id, public_key, sign_count, transports, label, int(time.time()),
+         user_id),
     )
     db.commit()
 
 
 def all_credentials():
     return get_db().execute("SELECT * FROM credentials").fetchall()
+
+
+def credentials_for_user(user_id: str):
+    return get_db().execute(
+        "SELECT * FROM credentials WHERE user_id=?", (user_id,)
+    ).fetchall()
 
 
 def find_credential(credential_id: bytes):

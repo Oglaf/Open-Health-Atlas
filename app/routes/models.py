@@ -9,12 +9,23 @@ import time
 
 from flask import Blueprint, jsonify, request
 
-from app import bridge
+from app import bridge, users
 from app.panel_db import get_db
 
 bp = Blueprint("models", __name__, url_prefix="/api/models")
 
 MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9/_.:\-]{0,79}\Z")
+
+
+@bp.before_request
+def _owner_only():
+    # The agent/model and budget surface is installation-global in Phase 1
+    # (docs/MULTI_USER.md) — never serve or let a non-owner mutate it.
+    if not users.is_owner(users.current_user()):
+        return jsonify(
+            ok=False,
+            error="Model and agent settings are not available for this account yet.",
+        ), 403
 
 
 def _setting(key, default=None):

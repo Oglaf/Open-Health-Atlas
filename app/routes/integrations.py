@@ -9,9 +9,20 @@ hardcoded "Connected" — stale or missing data says so (owner ground rule).
 """
 from flask import Blueprint, jsonify
 
-from app import bridge, canon, db_read
+from app import bridge, canon, db_read, users
 
 bp = Blueprint("integrations", __name__, url_prefix="/api/integrations")
+
+
+@bp.before_request
+def _owner_only():
+    # Connected-sources status is installation-global in Phase 1
+    # (docs/MULTI_USER.md) — hermes-status/fitbit-status speak for the whole
+    # install, not a single member.
+    if not users.is_owner(users.current_user()):
+        return jsonify(
+            error="Integrations are not available for this account yet.",
+        ), 403
 
 # "Connected" freshness windows, in days. The only two rows here with a data
 # DATE to compare against "now" (Telegram is a live gateway health check, not

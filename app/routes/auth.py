@@ -19,7 +19,8 @@ from webauthn.helpers.structs import (AuthenticatorSelectionCriteria,
                                       ResidentKeyRequirement,
                                       UserVerificationRequirement)
 
-from app import auth, limiter
+from app import auth, limiter, users
+from app.panel_db import BOOTSTRAP_USER_ID
 
 bp = Blueprint("auth", __name__)
 
@@ -32,12 +33,28 @@ def _origin() -> str:
     return current_app.config["PANEL_ORIGIN"]
 
 
-def _user_id() -> bytes:
-    return current_app.config["PANEL_USER_ID"].encode("utf-8")
-
-
 def _user_name() -> str:
     return current_app.config["PANEL_USER_NAME"]
+
+
+def _webauthn_identity(user_id: str):
+    """(user handle, display name, resident-key requirement) for enrollment.
+    The bootstrap owner keeps PANEL_USER_ID so existing passkeys keep
+    matching; every other user gets a stable per-user handle and must use a
+    resident/discoverable credential (login never types their id by default)."""
+    target = users.get_user(user_id)
+    name = _user_name() if user_id == BOOTSTRAP_USER_ID else (
+        target["display_name"] if target else user_id
+    )
+    handle = (
+        current_app.config["PANEL_USER_ID"].encode("utf-8") if user_id == BOOTSTRAP_USER_ID
+        else user_id.encode("utf-8")
+    )
+    resident = (
+        ResidentKeyRequirement.PREFERRED if user_id == BOOTSTRAP_USER_ID
+        else ResidentKeyRequirement.REQUIRED
+    )
+    return handle, name, resident
 
 
 def _safe_next() -> str:
@@ -56,9 +73,16 @@ def login_page():
 @bp.get("/enroll")
 def enroll_page():
     token = request.args.get("token", "")
+    token_user_id = auth.enroll_token_user(token)
+    token_user = users.get_user(token_user_id) if token_user_id else None
+    display = (
+        _user_name() if token_user_id == BOOTSTRAP_USER_ID
+        else (token_user["display_name"] if token_user else None)
+    )
     return render_template("enroll.html",
                            token=token,
-                           token_ok=auth.enroll_token_valid(token))
+                           token_ok=token_user_id is not None,
+                           token_user_display=display)
 
 
 @bp.post("/logout")
@@ -72,15 +96,31 @@ def logout():
 @bp.post("/api/auth/login/options")
 @limiter.limit("10/minute")
 def login_options():
-    creds = auth.all_credentials()
-    if not creds:
-        return jsonify(error="No passkeys enrolled yet — use an enrollment link "
-                             "(see README: passkey enrollment)."), 400
+    body = request.get_json(force=True, silent=True) or {}
+    username = body.get("username") if isinstance(body, dict) else None
+    if username is not None and (
+        not isinstance(username, str) or not users.USER_ID_RE.fullmatch(username)
+    ):
+        # A malformed username is handled exactly like no username at all —
+        # it must not behave differently from "that account doesn't exist".
+        username = None
+    if username is None:
+        if not auth.all_credentials():
+            return jsonify(error="No passkeys enrolled yet — use an enrollment link "
+                                 "(see README: passkey enrollment)."), 400
+        # Discoverable/resident-credential login: the platform picks among
+        # whatever passkey(s) it holds for this origin.
+        allow_credentials = []
+    else:
+        # An unknown username gets the exact same options shape as a known
+        # one with no credentials yet — never a different response.
+        allow_credentials = [
+            PublicKeyCredentialDescriptor(id=c["credential_id"])
+            for c in auth.credentials_for_user(username)
+        ]
     options = generate_authentication_options(
         rp_id=_rp_id(),
-        allow_credentials=[
-            PublicKeyCredentialDescriptor(id=c["credential_id"]) for c in creds
-        ],
+        allow_credentials=allow_credentials,
         user_verification=UserVerificationRequirement.REQUIRED,
     )
     session["auth_challenge"] = auth.b64u(options.challenge)
@@ -123,9 +163,15 @@ def login_verify():
         auth.audit("auth.login_failed", str(exc))
         return jsonify(error="verification failed"), 403
 
+    user_row = users.get_user(stored["user_id"])
+    if user_row is None or user_row["status"] != "active":
+        auth.audit("auth.login_failed", "disabled or missing user",
+                  user_id=stored["user_id"])
+        return jsonify(error="this account is disabled"), 403
+
     auth.update_sign_count(credential_id, verification.new_sign_count)
-    auth.audit("auth.login", stored["label"] or "")
-    token = auth.create_session()
+    auth.audit("auth.login", stored["label"] or "", user_id=user_row["id"])
+    token = auth.create_session(user_row["id"])
     resp = jsonify(ok=True)
     return auth.set_session_cookie(resp, token)
 
@@ -136,20 +182,25 @@ def login_verify():
 def register_options():
     body = request.get_json(force=True, silent=True) or {}
     token = body.get("token", "")
-    if not auth.enroll_token_valid(token):
+    user_id = auth.enroll_token_user(token)
+    if user_id is None:
         return jsonify(error="invalid or expired enrollment token"), 403
+    target = users.get_user(user_id)
+    if target is None or target["status"] != "active":
+        return jsonify(error="invalid or expired enrollment token"), 403
+    handle, name, resident = _webauthn_identity(user_id)
     options = generate_registration_options(
         rp_id=_rp_id(),
         rp_name="OpenHealthAtlas",
-        user_id=_user_id(),
-        user_name=_user_name(),
+        user_id=handle,
+        user_name=name,
         authenticator_selection=AuthenticatorSelectionCriteria(
-            resident_key=ResidentKeyRequirement.PREFERRED,
+            resident_key=resident,
             user_verification=UserVerificationRequirement.REQUIRED,
         ),
         exclude_credentials=[
             PublicKeyCredentialDescriptor(id=c["credential_id"])
-            for c in auth.all_credentials()
+            for c in auth.credentials_for_user(user_id)
         ],
     )
     session["reg_challenge"] = auth.b64u(options.challenge)
@@ -162,7 +213,11 @@ def register_options():
 def register_verify():
     body = request.get_json(force=True, silent=True) or {}
     token = body.get("token", "")
-    if not auth.enroll_token_valid(token):
+    user_id = auth.enroll_token_user(token)
+    if user_id is None:
+        return jsonify(error="invalid or expired enrollment token"), 403
+    target = users.get_user(user_id)
+    if target is None or target["status"] != "active":
         return jsonify(error="invalid or expired enrollment token"), 403
     challenge_b64 = session.pop("reg_challenge", None)
     if not challenge_b64:
@@ -180,7 +235,7 @@ def register_verify():
             require_user_verification=True,
         )
     except InvalidRegistrationResponse as exc:
-        auth.audit("auth.enroll_failed", str(exc))
+        auth.audit("auth.enroll_failed", str(exc), user_id=user_id)
         return jsonify(error="registration verification failed"), 403
 
     label = (body.get("label") or "").strip()[:60] or "passkey"
@@ -192,10 +247,11 @@ def register_verify():
         sign_count=verification.sign_count,
         transports=transports,
         label=label,
+        user_id=user_id,
     )
     auth.consume_enroll_token(token)
-    auth.audit("auth.enroll", label)
+    auth.audit("auth.enroll", label, user_id=user_id)
     # The device just proved presence + verification — log it straight in.
-    session_token = auth.create_session()
+    session_token = auth.create_session(user_id)
     resp = jsonify(ok=True)
     return auth.set_session_cookie(resp, session_token)

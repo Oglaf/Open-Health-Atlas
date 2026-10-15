@@ -15,9 +15,9 @@ panel's own standalone editor UI went away.
 import difflib
 import os
 
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, jsonify, request
 
-from app import bridge, db_read
+from app import bridge, db_read, users
 
 bp = Blueprint("plans", __name__, url_prefix="/api/plans")
 
@@ -42,7 +42,7 @@ def _note_path(rel):
     """Absolute path of a whitelisted note under the vault, or None."""
     if rel not in EDITABLE_NOTES:
         return None
-    vault = current_app.config.get("VAULT_DIR")
+    vault = users.current_vault_dir()
     if not vault:
         return None
     return os.path.join(vault, rel)

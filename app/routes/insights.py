@@ -9,7 +9,7 @@ from deploy.bridge_commands import OUTCOME_ANALYSIS_TIMEOUT
 
 from flask import Blueprint, current_app, jsonify, request
 
-from app import bridge, limiter
+from app import bridge, limiter, users
 from app.canon import CanonicalRangeError, canonical_range, range_bounds
 bp = Blueprint("insights", __name__, url_prefix="/api/insights")
 
@@ -613,7 +613,7 @@ def brief():
     """Test-only compatibility read for unvalidated vault Markdown."""
     if not _legacy_reference_enabled():
         return _legacy_route_quarantined("the governed synthesis history API")
-    vault = current_app.config.get("VAULT_DIR")
+    vault = users.current_vault_dir()
     if not vault:
         return jsonify(brief=None)
     pdir = os.path.join(vault, "personal", "patterns")

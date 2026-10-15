@@ -7,8 +7,9 @@
     <h1>Enroll this device</h1>
   </div>
   {% if token_ok %}
-  <p class="dim">Registers a passkey (Face ID / Touch ID / security key) for the
-  OpenHealthAtlas on <em>this</em> device. The link is single-use.</p>
+  <p class="dim">Registers a passkey (Face ID / Touch ID / security key) for
+  {% if token_user_display %}<strong>{{ token_user_display }}</strong>{% else %}this account{% endif %}
+  on <em>this</em> device. The link is single-use.</p>
   <label class="field">
     <span>Device name</span>
     <input id="cred-label" type="text" maxlength="60" placeholder="e.g. MacBook / iPhone" autocomplete="off">

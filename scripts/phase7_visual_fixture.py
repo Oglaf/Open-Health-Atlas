@@ -269,7 +269,7 @@ def fake_bridge(subcommand, *args, **_kwargs):
     return {"ok": True}
 
 
-auth.current_session = lambda: {"token_hash": "visual-fixture"}
+auth.current_session = lambda: {"token_hash": "visual-fixture", "user_id": "owner"}
 bridge.run = fake_bridge
 database = os.environ.get("HERMES_PHASE7_VISUAL_DB", "/private/tmp/hermes-phase7-visual.db")
 try:
@@ -280,6 +280,11 @@ application = create_app({
     "PANEL_DB": database, "PANEL_COOKIE_SECURE": False,
     "WTF_CSRF_ENABLED": False, "RATELIMIT_ENABLED": False,
 })
+with application.app_context():
+    # The fake session above resolves to the bootstrap owner (see
+    # app/users.py); a fresh temp panel.db has no `users` rows yet.
+    from app.users import ensure_bootstrap_user
+    ensure_bootstrap_user()
 
 
 STATIC_CSRF_MARKER = "PHASE7_STATIC_FIXTURE_CSRF_TOKEN"

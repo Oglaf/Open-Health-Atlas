@@ -23,7 +23,7 @@ import json
 import socket
 import time
 
-from flask import current_app
+from flask import current_app, g
 
 from app.panel_db import get_db
 from deploy.bridge_commands import COMMAND_FLAGS, CLIENT_FLAG_CHECKS, NO_VALUE_FLAGS
@@ -78,10 +78,19 @@ def run(
     payload = {"subcmd": subcmd, "args": str_args}
     if stdin is not None:
         payload["stdin"] = stdin
-    request = json.dumps(payload) + "\n"
-    # A dedicated socket may be selected only by trusted server code.  The
+    # A dedicated socket may be selected only by trusted server code — the
     # localhost fictional Green-day display uses this to reach its isolated
-    # read-only fixture broker without switching the product/Recovery DB.
+    # read-only fixture broker without switching the product/Recovery DB, and
+    # that path never carries (or needs) a panel user. Every other call is a
+    # request for *someone's* data, so a missing user is an error, not a
+    # silent default onto whichever database the broker happens to hold.
+    if socket_path is None:
+        user_id = g.get("user_id")
+        if not user_id:
+            _audit(subcmd, str_args, "refused-no-user")
+            raise BridgeError("no user in the current request context")
+        payload["user"] = user_id
+    request = json.dumps(payload) + "\n"
     sock_path = socket_path or current_app.config["BRIDGE_SOCKET"]
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
@@ -134,8 +143,8 @@ def run(
 def _audit(subcmd, args, outcome) -> None:
     db = get_db()
     db.execute(
-        "INSERT INTO audit_log(ts, event, detail) VALUES(?,?,?)",
+        "INSERT INTO audit_log(ts, event, detail, user_id) VALUES(?,?,?,?)",
         (int(time.time()), f"bridge.{subcmd}",
-         json.dumps({"args": args, "outcome": outcome})),
+         json.dumps({"args": args, "outcome": outcome}), g.get("user_id")),
     )
     db.commit()

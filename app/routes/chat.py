@@ -12,11 +12,22 @@ import uuid
 
 from flask import Blueprint, current_app, jsonify, request
 
-from app import auth, bridge, limiter
+from app import auth, bridge, limiter, users
 from app.canon import CanonicalRangeError, canonical_range
-from app.panel_db import LEGACY_CONVERSATIONS, get_db
+from app.panel_db import BOOTSTRAP_USER_ID, LEGACY_CONVERSATIONS, get_db
 
 bp = Blueprint("chat", __name__, url_prefix="/api/chat")
+
+
+@bp.before_request
+def _owner_only():
+    # Hermes chat is installation-global in Phase 1 (docs/MULTI_USER.md) — a
+    # non-owner must never silently see the owner's conversations.
+    if not users.is_owner(users.current_user()):
+        return jsonify(
+            ok=False,
+            error="Chat is not available for this account yet.",
+        ), 403
 
 MAX_MESSAGE = 4000
 MAX_EDITED_TITLE = 120
@@ -88,9 +99,11 @@ def _ensure_legacy_conversation(thread):
             """INSERT OR IGNORE INTO chat_conversations(
                  id,title,surface,lens,selected_regions_json,range_kind,
                  range_from,range_to,archived_at,hermes_session_id,
-                 source_context_json,created_at,updated_at,busy_turn_id,busy_until
-               ) VALUES(?,?,'panel',?,'[]','all',NULL,NULL,NULL,?,?,?, ?,NULL,NULL)""",
-            (conversation_id, title, thread, session_id, source, now_ms, now_ms),
+                 source_context_json,created_at,updated_at,busy_turn_id,busy_until,
+                 user_id
+               ) VALUES(?,?,'panel',?,'[]','all',NULL,NULL,NULL,?,?,?, ?,NULL,NULL,?)""",
+            (conversation_id, title, thread, session_id, source, now_ms, now_ms,
+             BOOTSTRAP_USER_ID),
         )
         db.commit()
     except Exception:
@@ -643,8 +656,9 @@ def create_conversation():
             """INSERT INTO chat_conversations(
                  id,title,surface,lens,selected_regions_json,range_kind,
                  range_from,range_to,archived_at,hermes_session_id,
-                 source_context_json,created_at,updated_at,busy_turn_id,busy_until
-               ) VALUES(?,?,'panel',?,?,?,?,?,NULL,?,?,?,?,NULL,NULL)""",
+                 source_context_json,created_at,updated_at,busy_turn_id,busy_until,
+                 user_id
+               ) VALUES(?,?,'panel',?,?,?,?,?,NULL,?,?,?,?,NULL,NULL,?)""",
             (
                 conversation_id,
                 title or "",
@@ -657,6 +671,7 @@ def create_conversation():
                 source,
                 now_ms,
                 now_ms,
+                BOOTSTRAP_USER_ID,
             ),
         )
         db.commit()
@@ -979,8 +994,8 @@ def _send_turn(
         db.execute(
             """INSERT INTO chat_log(
                  ts,thread,role,content,conversation_id,turn_id,context_json,
-                 evidence_json,delivery_status
-               ) VALUES(?,?,?,?,?,?,?,?,'pending')""",
+                 evidence_json,delivery_status,user_id
+               ) VALUES(?,?,?,?,?,?,?,?,'pending',?)""",
             (
                 now_s,
                 row["lens"],
@@ -992,6 +1007,7 @@ def _send_turn(
                 _canonical_json(
                     _selection_record(stored_context["range"], selected_findings)
                 ) if selected_findings else None,
+                BOOTSTRAP_USER_ID,
             ),
         )
         session_id = row["hermes_session_id"]
@@ -1052,8 +1068,8 @@ def _send_turn(
         db.execute(
             """INSERT OR IGNORE INTO chat_log(
                  ts,thread,role,content,conversation_id,turn_id,context_json,
-                 evidence_json,delivery_status
-               ) VALUES(?,?,?,?,?,?,?,?,'complete')""",
+                 evidence_json,delivery_status,user_id
+               ) VALUES(?,?,?,?,?,?,?,?,'complete',?)""",
             (
                 int(time.time()),
                 row["lens"],
@@ -1063,6 +1079,7 @@ def _send_turn(
                 turn_id,
                 _canonical_json(trusted),
                 _canonical_json(evidence) if evidence is not None else None,
+                BOOTSTRAP_USER_ID,
             ),
         )
         db.execute(

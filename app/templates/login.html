@@ -7,6 +7,11 @@
     <h1>OpenHealthAtlas</h1>
     <p class="dim">Private. Tailscale + passkey only.</p>
   </div>
+  <label class="field">
+    <span>Username (optional)</span>
+    <input id="login-username" type="text" maxlength="32" autocomplete="username"
+           placeholder="leave blank to use this device's passkey">
+  </label>
   <button id="passkey-login" class="primary-btn" type="button" data-next="{{ next }}">
     Sign in with passkey
   </button>

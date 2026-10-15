@@ -18,6 +18,8 @@ import sqlite3
 
 from flask import current_app, g
 
+from app import users
+
 _ALLOWED_ACTIONS = {
     getattr(sqlite3, "SQLITE_READ", 20),
     getattr(sqlite3, "SQLITE_SELECT", 21),
@@ -30,15 +32,25 @@ def _authorizer(action, _arg1, _arg2, _db_name, _trigger):
     return sqlite3.SQLITE_OK if action in _ALLOWED_ACTIONS else sqlite3.SQLITE_DENY
 
 
+def _health_db_path():
+    """The requesting user's health.db, or the installation default when no
+    user is resolved (a bare app-context call, e.g. a unit test, or trusted
+    server-side code outside a request) — the exact single-user behavior."""
+    user = users.current_user()
+    if user is not None:
+        return users.user_health_db(user)
+    return current_app.config.get("HEALTH_DB")
+
+
 def available() -> bool:
-    path = current_app.config.get("HEALTH_DB")
+    path = _health_db_path()
     return bool(path) and os.path.exists(path)
 
 
 def get_health_db() -> sqlite3.Connection:
     """Per-request read-only connection; closed by the factory's teardown."""
     if "health_db" not in g:
-        path = current_app.config["HEALTH_DB"]
+        path = _health_db_path()
         con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
         con.row_factory = sqlite3.Row
         # Pragmas before the authorizer is installed — it would deny them.
@@ -87,7 +99,7 @@ def snapshot(dst_path: str) -> None:
     """Consistent full-DB copy via the sqlite backup API, from a read-only
     source connection. The ONLY place besides get_health_db that opens the DB;
     the lint test keeps sqlite3 confined to the sanctioned modules."""
-    src = sqlite3.connect(f"file:{current_app.config['HEALTH_DB']}?mode=ro", uri=True)
+    src = sqlite3.connect(f"file:{_health_db_path()}?mode=ro", uri=True)
     try:
         dst = sqlite3.connect(dst_path)
         with dst:

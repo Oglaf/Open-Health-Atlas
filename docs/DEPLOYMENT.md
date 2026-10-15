@@ -66,6 +66,18 @@ the standard data directory contains `health.db` and a separate `vault/`.
 Configure the same environment for the panel and broker. The resolver does not
 move existing notes or sidecars; inspect and copy any older data separately.
 
+## Multi-user installs
+
+A single installation may serve more than one person: each gets a separate
+`health.db` + vault under `USERS_ROOT` (default `<HERMES_DATA_DIR>/users`),
+created with `flask user-create <id>`. The existing single-user database
+becomes the bootstrap `owner` automatically and is never moved. The broker
+needs the matching `BRIDGE_USERS_ROOT` environment variable to resolve
+non-owner users, and its systemd unit's read-only bind mount must then cover
+the whole users root, not just the owner's database/vault. See
+[Multi-user design § Operator guide](MULTI_USER.md#operator-guide) for the
+full CLI reference, broker configuration and the exact bind-mount change.
+
 ## Panel agent paths
 
 The server-owned environment may set `HERMES_VAULT` for Hermes working-directory

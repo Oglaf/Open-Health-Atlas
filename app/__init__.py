@@ -74,7 +74,7 @@ def create_app(overrides: dict | None = None) -> Flask:
     limiter.init_app(app)
     csrf.init_app(app)
 
-    from app import auth, db_read
+    from app import auth, db_read, users
     from app.panel_db import close_db, init_db
 
     init_db(app)
@@ -116,19 +116,33 @@ def create_app(overrides: dict | None = None) -> Flask:
         endpoint = request.endpoint
         if endpoint is None or endpoint in PUBLIC_ENDPOINTS:
             return None
+        # A session whose user_id no longer resolves, or whose user has been
+        # disabled, must stop authenticating immediately — not just at
+        # natural session expiry.
         if auth.current_session() is not None:
-            return None
+            user = users.current_user()
+            if user is not None and user["status"] == "active":
+                return None
         if request.method == "GET" and not request.path.startswith("/api/"):
             return redirect(url_for("auth.login_page", next=request.path))
         return jsonify(error="unauthenticated"), 401
 
     @app.context_processor
     def inject_nav():
+        user = users.current_user()
+        # The bootstrap owner's display name always tracks the live
+        # HERMES_DISPLAY_NAME config, exactly as a single-user install
+        # behaved before — the stored row value is only a migration artifact.
+        display_name = (
+            user["display_name"]
+            if user is not None and not users.is_owner(user)
+            else app.config["HERMES_DISPLAY_NAME"]
+        )
         return {
             "NAV": NAV,
             "MOBILE_TABS": MOBILE_TABS,
             "logged_in": auth.current_session() is not None,
-            "display_name": app.config["HERMES_DISPLAY_NAME"],
+            "display_name": display_name,
         }
 
     @app.errorhandler(CSRFError)
@@ -153,11 +167,71 @@ def create_app(overrides: dict | None = None) -> Flask:
         return resp
 
     @app.cli.command("enroll-token")
-    def enroll_token_cmd():
+    @click.option("--user", "user_id", default=None,
+                  help="User id to enroll a passkey for (default: the bootstrap owner).")
+    def enroll_token_cmd(user_id):
         """Print a one-time passkey enrollment URL (valid 15 minutes)."""
-        token = auth.new_enroll_token()
-        auth.audit("auth.enroll_token_issued")
+        from app.panel_db import BOOTSTRAP_USER_ID
+        user_id = user_id or BOOTSTRAP_USER_ID
+        if user_id != BOOTSTRAP_USER_ID:
+            target = users.get_user(user_id)
+            if target is None or target["status"] != "active":
+                raise click.ClickException(f"no active user '{user_id}' — run `flask user-create` first")
+        token = auth.new_enroll_token(user_id)
+        auth.audit("auth.enroll_token_issued", user_id=user_id)
         click.echo(f"{app.config['PANEL_ORIGIN']}/enroll?token={token}")
         click.echo("Open this on the device you want to enroll. Valid 15 minutes, single use.")
+
+    @app.cli.command("user-create")
+    @click.argument("user_id")
+    @click.option("--name", "display_name", default=None,
+                  help="Display name shown in the panel (default: the id).")
+    @click.option("--role", type=click.Choice(["admin", "member"]), default="member")
+    def user_create_cmd(user_id, display_name, role):
+        """Create a user with their own health.db + vault under USERS_ROOT."""
+        from pathlib import Path
+        from scripts.init_hermes import init_health_database
+        try:
+            users.validate_user_id(user_id)
+        except users.InvalidUserId as exc:
+            raise click.ClickException(str(exc))
+        if users.get_user(user_id) is not None:
+            raise click.ClickException(f"user already exists: {user_id}")
+        user_dir = Path(users.users_root(app)) / user_id
+        user_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(user_dir, 0o700)
+        try:
+            init_health_database(user_dir / "health.db", user_dir / "vault")
+        except FileExistsError as exc:
+            raise click.ClickException(str(exc))
+        users.create_user(user_id, display_name, role)
+        auth.audit("user.create", user_id)
+        click.echo(f"created user '{user_id}' ({role}) at {user_dir}")
+
+    @app.cli.command("user-list")
+    def user_list_cmd():
+        """List every panel user."""
+        for row in users.all_users():
+            click.echo(f"{row['id']}\t{row['role']}\t{row['status']}\t{row['display_name']}")
+
+    @app.cli.command("user-disable")
+    @click.argument("user_id")
+    def user_disable_cmd(user_id):
+        """Disable a user and revoke their sessions immediately."""
+        if users.get_user(user_id) is None:
+            raise click.ClickException(f"no such user: {user_id}")
+        users.set_status(user_id, "disabled")
+        auth.audit("user.disable", user_id)
+        click.echo(f"disabled '{user_id}'")
+
+    @app.cli.command("user-enable")
+    @click.argument("user_id")
+    def user_enable_cmd(user_id):
+        """Re-enable a disabled user."""
+        if users.get_user(user_id) is None:
+            raise click.ClickException(f"no such user: {user_id}")
+        users.set_status(user_id, "active")
+        auth.audit("user.enable", user_id)
+        click.echo(f"enabled '{user_id}'")
 
     return app

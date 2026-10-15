@@ -193,6 +193,7 @@ def test_exact_additive_migration_backfill_is_idempotent_and_preserves_journal(t
         ("updated_at", "INTEGER", 1, None, 0),
         ("busy_turn_id", "TEXT", 0, None, 0),
         ("busy_until", "INTEGER", 0, None, 0),
+        ("user_id", "TEXT", 0, None, 0),
     ]
     connection.close()
 
