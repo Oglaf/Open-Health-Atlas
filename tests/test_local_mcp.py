@@ -342,8 +342,11 @@ def test_multi_user_isolates_databases_and_refuses_unknown_or_escaping_ids(tmp_p
                 listed = (await session.list_tools()).tools
                 assert {tool.name for tool in listed} == {
                     "health_catalog", "health_query", "health_analyze",
-                    "health_evidence", "health_task_status",
+                    "health_evidence", "health_task_status", "health_write",
                 }
+                read_tools = [t for t in listed if t.name != "health_write"]
+                for tool in read_tools:
+                    assert tool.annotations.readOnlyHint
                 for tool in listed:
                     assert "user" in tool.inputSchema["required"]
                     assert tool.inputSchema["additionalProperties"] is False

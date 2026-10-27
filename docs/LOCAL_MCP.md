@@ -171,6 +171,70 @@ for every user created afterwards. `panel.db` holds passkey public keys,
 hashed session tokens and the audit log; granting it read access is what
 lets the MCP refuse disabled users.
 
+## Write/ingest (`health_write`)
+
+By default the standalone MCP server is read-only. In multi-user mode the
+operator MAY additionally configure the deployment's existing write broker
+(the same Unix-socket broker the panel itself uses) so the connected AI
+client — for example a family health coach — can LOG records on behalf of a
+named family member: calories/food (`eat`, `log-food`), training sets
+(`log-set`) and routines (`routine-set`, `routine-remove`, `routine-undo`),
+check-ins and day ratings (`checkin`, `day-rating`), notes (`write-note`),
+commitments (`commitment-set`, `commitment-list`, `log-commitment`), and
+batch/prep/schedule entries (`set-batch`, `prep`, `schedule-set`).
+
+Nothing about the write path is new: every `health_write` call crosses the
+hermes-bridge broker's SO_PEERCRED gate, subcommand/flag whitelist, stdin
+rules and append-only audit log, exactly like a panel write. The MCP never
+touches SQLite for a write and never writes a file itself; single-user
+`--database` mode stays strictly read-only (the tool is absent there, and
+`--bridge-socket` requires `--users-root`). Where no broker socket is
+configured, the multi-user tool is present but refuses: "no broker
+configured; ingest is unavailable in this deployment". It does NOT replace
+the panel: the panel remains the human interface for browsing, correcting,
+administering users and everything the broker does not whitelist (imports,
+admin commands, collections, analysis jobs); `health_write` is logging only.
+
+Configure it by adding one argument to the multi-user configuration above:
+
+```json
+"--bridge-socket", "/run/hermes-bridge/bridge.sock"
+```
+
+The broker must also authorize the MCP's host account in its peer-credential
+gate. `BRIDGE_ALLOWED_UID` is a comma-separated set of trusted peer uids
+(each a bare integer, no spaces or duplicates); one value keeps the
+historical single-trusted-client behavior. The MCP process's running uid is
+appended as a second trusted peer:
+
+```
+BRIDGE_ALLOWED_UID=1000,10000
+```
+
+Keep the socket ACL as narrow as the deployment requires — a group readable
+only by the broker's own service group plus the panel and the extra client
+accounts. Continuation of the read grants above:
+
+```
+setfacl -m u:mcpuser:--x /run/hermes-bridge                      # traverse the socket dir
+setfacl -m u:mcpuser:rw- /run/hermes-bridge/bridge.sock          # connect to the broker socket
+```
+
+Run as the socket's owner (the broker's service account creates it mode 0660
+group `hermesbridge` on every start); replace `mcpuser` with the account
+that runs the MCP after the broker has started.
+
+**Trust caveat for writes (stronger than for reads):** the connected MCP
+client chooses `user` on every call — there is no login and no passkey here.
+Whoever can talk through the coach can therefore write health data into any
+user the deployment lets that socket reach: a wrong `user` name is a
+recorded-but-real write into someone else's log. Deployment must keep the
+socket ACL narrow and the broker's audit trail observed (`deploy/hermes-bridge`
+audits every call, refused or accepted, with note contents hashed rather than
+verbatim). The MCP returns the broker's outcome JSON — refusals included —
+verbatim to the client; product validation (argparse choices, dates, values)
+remains owned by health.py and the broker, never re-implemented client-side.
+
 ## First use
 
 After connecting, check that the client lists the tools below. Start with a
@@ -184,6 +248,7 @@ ask about a specific date range present in your records.
 | `health_analyze` | Start a bounded analysis for an outcome and selected exposures. |
 | `health_evidence` | Start verification of complete evidence references returned by earlier results. |
 | `health_task_status` | Wait briefly for a background task and retrieve its result. |
+| `health_write` | **Multi-user only, ingest-only.** Logs a validated record (food/calories, training sets, routines, check-ins, day ratings, notes, commitments, schedules) for one named user through the deployment's audited write broker; present-but-refusing when no broker socket is configured. Not available in single-user mode. See [Write/ingest (health_write)](#writeingest-health_write). |
 
 The client should discover feature keys before querying, use explicit date
 ranges and pass complete returned evidence-reference objects when verifying
@@ -255,9 +320,12 @@ still applies.
 
 The database (or, in multi-user mode, the set of per-user databases under
 `--users-root`) is selected at startup. A tool request cannot switch
-databases, provide raw SQL, open an arbitrary file or write health records;
-in multi-user mode its only database-related choice is which already-resolved
-`user` to act as. The canonical health database is opened read-only. Private
+databases, provide raw SQL, open an arbitrary file or write health records
+directly; in multi-user mode its only database-related choice is which
+already-resolved `user` to act as. The canonical health database is opened
+read-only. (`health_write`, when a broker socket is configured, writes only
+through the audited broker — never into the database this server itself
+opens; see [Write/ingest (health_write)](#writeingest-health_write).) Private
 derived cache and lock files may be created beside it; they are not
 additional canonical health records.
 

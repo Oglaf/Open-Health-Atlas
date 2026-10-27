@@ -41,6 +41,14 @@ In:
   boundary between family members — it is trusted-local to whoever can reach
   the process, the same trust level as a shared Hermes profile. File
   permissions on `--users-root`/`--panel-db` are the real boundary.
+- Optional broker-mediated ingest (`health_write`): with
+  `--bridge-socket` configured (it requires `--users-root`), the MCP client
+  can LOG validated records (food/calories, training sets, routines,
+  check-ins, day ratings, notes, commitments, schedules) for a named user
+  through the same audited broker the panel uses — the MCP never writes
+  SQLite directly. Without it, this MCP is read-only by default; ingest only
+  where a broker socket is configured. See
+  [docs/LOCAL_MCP.md "Write/ingest (health_write)"](LOCAL_MCP.md#writeingest-health_write).
 
 Out (single owner only, **fail closed** for non-bootstrap users with a clear message):
 
@@ -133,6 +141,7 @@ account creation falls back to `flask user-create` on the panel host.
 |---|---|---|
 | `BRIDGE_USERS_ROOT` | unset | Enables multi-user mode in the broker. Unset: the broker ignores `user` entirely and behaves exactly as a single-user install always has. Set: every request must name a real, active identity — the bootstrap owner (`BRIDGE_OWNER_USER`) or a subdirectory of this root — or the broker refuses with code 2 and audits the refusal. |
 | `BRIDGE_OWNER_USER` | `owner` | The id that maps to the broker's own configured `HEALTH_DB`/`HEALTH_VAULT` unchanged (no per-user override). |
+| `BRIDGE_ALLOWED_UID` | unset | The broker's SO_PEERCRED gate. A single bare integer is exactly the historical single trusted peer (the panel). A comma-separated set — e.g. `1000,10000` — authorizes the panel plus additional trusted clients (such as an MCP `health_write` ingest peer): bare integers, no spaces, no duplicates; anything else fails broker startup. |
 
 `BRIDGE_USERS_ROOT` should normally equal the panel's `USERS_ROOT` (the panel
 resolves and validates `<id>` client-side too — the broker is the

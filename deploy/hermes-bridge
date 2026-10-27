@@ -40,7 +40,8 @@ import time
 
 from bridge_commands import (
     ADMIN_COMMANDS, COMMAND_FLAGS, NO_VALUE_FLAGS, OUTCOME_ANALYSIS_TIMEOUT,
-    PROFILE_MAX_BYTES, ProfileError, load_profile, validate_profile,
+    PROFILE_MAX_BYTES, ProfileError, load_profile, parse_allowed_uids,
+    validate_profile,
 )
 
 # In a full-repo deployment (Docker; see deploy/docker/oha) this file lives at
@@ -110,11 +111,16 @@ _JOB_WAKE = threading.Event()
 _JOB_STOP = threading.Event()
 
 
-def _allowed_uid():
-    v = os.environ.get("BRIDGE_ALLOWED_UID")
-    if v is not None:
-        return int(v)
-    return pwd.getpwnam("panel").pw_uid
+def _allowed_uids():
+    """Set of peer uids allowed to connect (see bridge_commands
+    .parse_allowed_uids). Unset BRIDGE_ALLOWED_UID keeps the historical
+    single-trusted-service-account behavior; a comma-separated env var
+    authorizes the panel plus additional trusted peers, each still gated
+    per connection by SO_PEERCRED."""
+    parsed = parse_allowed_uids(os.environ.get("BRIDGE_ALLOWED_UID"))
+    if parsed is not None:
+        return parsed
+    return frozenset({pwd.getpwnam("panel").pw_uid})
 
 
 HAS_PEERCRED = hasattr(socket, "SO_PEERCRED")
@@ -674,7 +680,7 @@ class Handler(socketserver.StreamRequestHandler):
         except OSError:
             return
         # Enforce only when the platform gives us the peer uid (Linux server).
-        if peer_uid is not None and peer_uid != self.server.allowed_uid:
+        if peer_uid is not None and peer_uid not in self.server.allowed_uids:
             try:
                 _audit({"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "uid": peer_uid,
                         "phase": "rejected", "error": "peer uid not authorized"})
@@ -718,7 +724,7 @@ class Server(socketserver.ThreadingUnixStreamServer):
         if os.path.exists(SOCK):
             os.unlink(SOCK)
         super().__init__(SOCK, Handler)
-        self.allowed_uid = _allowed_uid()
+        self.allowed_uids = _allowed_uids()
         # The socket inherits the process's group (hermesbridge, set by the
         # unit's Group=), so panel — a member — can connect once we open the
         # group bit. Owner+group rw, nothing for others.

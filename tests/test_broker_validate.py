@@ -6,6 +6,7 @@ import importlib.util
 import io
 import json
 import pathlib
+import pytest
 import sys
 import threading
 from unittest.mock import patch
@@ -376,3 +377,51 @@ def test_phase5_bridge_validates_identifiers_ranges_cursors_and_positions():
         ],
     ) is not None
     assert b._validate("synthesis-history", ["--before", "not-an-id"]) is not None
+
+
+def test_parse_allowed_uids_single_value_behaves_exactly_as_before(monkeypatch):
+    """Single-value BRIDGE_ALLOWED_UID keeps the historical behavior: one
+    trusted peer, byte-compatible with the old int(value) parsing."""
+    from deploy.bridge_commands import parse_allowed_uids
+
+    assert parse_allowed_uids(None) is None                       # unset -> default path
+    assert parse_allowed_uids("1000") == frozenset({1000})        # exactly the old value
+    assert parse_allowed_uids("0") == frozenset({0})
+
+
+def test_parse_allowed_uids_accepts_a_set_and_refuses_everything_loose():
+    from deploy.bridge_commands import parse_allowed_uids
+
+    assert parse_allowed_uids("1000,10000") == frozenset({1000, 10000})
+
+    for garbage in (
+        "",            # empty listing
+        "1000,",       # trailing comma
+        ",1000",       # leading comma
+        "1000, 10000", # space
+        "1000,1000",   # duplicate
+        "-1000",       # sign
+        "1.5",         # float
+        "0x10",        # hex
+        "١٠٠٠",         # non-ASCII digits
+        "panel",       # not an integer at all
+    ):
+        with pytest.raises(ValueError):
+            parse_allowed_uids(garbage)
+
+
+def test_broker_startup_fails_closed_on_unparseable_uid_list(monkeypatch):
+    monkeypatch.setenv("BRIDGE_ALLOWED_UID", "1000, nope")
+    with pytest.raises(ValueError):
+        _load()._allowed_uids()   # the broker's Server() calls this before any socket opens
+
+
+def test_broker_allowed_uids_fallback_and_set(monkeypatch):
+    b = _load()
+    monkeypatch.setenv("BRIDGE_ALLOWED_UID", "1000,10000")
+    assert b._allowed_uids() == frozenset({1000, 10000})
+    monkeypatch.setenv("BRIDGE_ALLOWED_UID", "10000")
+    assert b._allowed_uids() == frozenset({10000})   # single value unchanged
+    monkeypatch.delenv("BRIDGE_ALLOWED_UID", raising=False)
+    with patch.object(b.pwd, "getpwnam", lambda name: type("R", (), {"pw_uid": 4242})()):
+        assert b._allowed_uids() == frozenset({4242})   # unset -> default (panel uid)

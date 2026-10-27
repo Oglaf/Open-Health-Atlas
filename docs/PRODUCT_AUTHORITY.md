@@ -46,6 +46,29 @@ deterministic ledger and `synthesis-prepare`, validated optional `synthesis-v1`
 storage, and genuine Hermes integration remain. Historical receipts describe
 their original snapshots and are not new verification of the current tree.
 
+## Fork deployment: broker-mediated MCP ingest (this fork)
+
+Owner decision, 2026-10-27: Christian Silva, operator of this fork (Oglaf fork
+of kajeesan/Open-Health-Atlas, AGPL-3.0-only) and owner of this fork's
+deployment, approved in his own words: "Extend MCP, my goal is to hermes write
+calories, exercise routines and etc…". This authorizes a bounded,
+broker-mediated `health_write` MCP capability in THIS deployment only:
+
+- restricted to the panel's own validated writer subcommands already declared
+  in `deploy/bridge_commands.py` (a fixed exposure subset; nothing new);
+- per-user, carrying the same `user` resolution semantics as reads;
+- socket-only: every write crosses the private Unix-socket broker's
+  SO_PEERCRED gate, flag whitelist, stdin rules and append-only audit (the
+  MCP never touches SQLite for writes and never writes files itself);
+- refused everywhere the broker is not configured (fail closed).
+
+Trust caveat recorded with the decision: the connected MCP client chooses
+`user`, so whoever can talk through the health coach can write data into any
+user the deployment lets that socket reach. Nothing else in this document is
+widened: no new model or interpretation runtime, no schema change, and the
+standalone MCP remains read-only in every mode where no broker socket is
+configured.
+
 ## First accepted product journey
 
 The first accepted journey is restricted to the fictional

@@ -154,6 +154,36 @@ NO_VALUE_FLAGS = {"--all", "--include-provenance"}
 OUTCOME_ANALYSIS_TIMEOUT = 570
 
 
+def parse_allowed_uids(value):
+    """`BRIDGE_ALLOWED_UID` as a SET of peer uids, or None when unset.
+
+    The default (unset) keeps the historical behavior everywhere: the
+    caller falls back to the single trusted service account (the panel).
+    One bare int is exactly the old single-value behavior; a comma-separated
+    listing authorizes several trusted peers (panel + additional clients).
+    Strict: every entry is an unsigned ASCII integer, no spaces, no signs,
+    no duplicates, never an empty listing — anything else is a configuration
+    error the broker must fail closed on (ValueError at startup). Both the
+    broker (peer check) and any client that must mirror the same trust shape
+    use this one parser so they cannot drift apart."""
+
+    if value is None:
+        return None
+    if value == "":
+        raise ValueError("BRIDGE_ALLOWED_UID is set but empty")
+    uids = []
+    for part in value.split(","):
+        if not part.isascii() or not part.isdigit() or not str(int(part)) == part:
+            raise ValueError(
+                f"BRIDGE_ALLOWED_UID entries must be bare integers, got {part!r}"
+            )
+        uid = int(part)
+        if uid in uids:
+            raise ValueError(f"BRIDGE_ALLOWED_UID lists uid {uid} more than once")
+        uids.append(uid)
+    return frozenset(uids)
+
+
 # ── per-user profile.json (docs/MULTI_USER.md "Per-user profile settings") ──
 # The bootstrap owner keeps reading these straight off the installation
 # process environment, exactly as a single-user install always has.
