@@ -123,6 +123,28 @@ def test_vault_backed_note_route_never_crosses_users(two_user_app):
     assert guest_note["content"] == "guest's private plan"
 
 
+def test_activity_feed_never_shows_another_users_writes(two_user_app):
+    """panel.db's audit_log is shared; its feed carries command arguments
+    (readings, notes), so /api/log/recent must filter by the session user."""
+    with two_user_app.app_context():
+        db = get_db()
+        for user_id, reading in ((BOOTSTRAP_USER_ID, 111), ("guest", 222)):
+            db.execute(
+                "INSERT INTO audit_log(ts, event, detail, user_id) VALUES(?,?,?,?)",
+                (int(time.time()), "bridge.log",
+                 f'{{"args": ["vitals", "systolic={reading}"], "outcome": "exit:0"}}',
+                 user_id),
+            )
+        db.commit()
+    owner = _client_as(two_user_app, BOOTSTRAP_USER_ID)
+    guest = _client_as(two_user_app, "guest")
+
+    owner_feed = owner.get("/api/log/recent").get_data(as_text=True)
+    guest_feed = guest.get("/api/log/recent").get_data(as_text=True)
+    assert "systolic=111" in owner_feed and "systolic=222" not in owner_feed
+    assert "systolic=222" in guest_feed and "systolic=111" not in guest_feed
+
+
 def test_disabled_user_session_rejected_immediately(two_user_app):
     guest = _client_as(two_user_app, "guest")
     assert guest.get("/").status_code == 200

@@ -11,6 +11,14 @@ Back up both databases before applying a schema migration, then verify the
 copies can be opened and pass SQLite `PRAGMA quick_check`. Keep configuration,
 credentials, uploaded material, and database files outside the source tree.
 
+## Containers
+
+For a container-based deployment of the panel and the write broker (two
+long-lived containers plus a one-off admin container, sharing one image),
+see [Docker deployment](DOCKER.md). It keeps the same read-only/read-write
+split described below, expressed as volume mounts instead of systemd
+sandboxing.
+
 ## Local MCP and continuous operation
 
 For a user-operated local MCP connection, follow [Local MCP setup](LOCAL_MCP.md).

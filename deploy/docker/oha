@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+"""Container entrypoint: dispatches to the panel, the broker, database/vault
+initialization, or the `flask` admin CLI. Not installed outside the image —
+see docs/DOCKER.md.
+"""
+import os
+import sys
+
+ROOT = "/app"
+sys.path.insert(0, ROOT)
+
+
+def _init():
+    """Idempotent bootstrap: create the owner's health.db/vault under
+    HERMES_DATA_DIR and panel.db at PANEL_DB if they don't already exist.
+    Reuses scripts/init_hermes.py's own functions so a container `init` run
+    initializes a database exactly the same way the CLI does; split here only
+    because the container keeps health.db/vault and panel.db on separate
+    volumes (/data read-only in the panel container, /state read-write)."""
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from app.panel_db import init_db as init_panel_db
+    from scripts.init_hermes import init_health_database
+
+    data_dir = Path(os.environ.get("HERMES_DATA_DIR", "/data"))
+    health_db = Path(os.environ.get("HEALTH_DB", str(data_dir / "health.db")))
+    vault_dir = Path(os.environ.get("VAULT_DIR", str(data_dir / "vault")))
+    panel_db = Path(os.environ.get("PANEL_DB", "/state/panel.db"))
+
+    data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(data_dir, 0o700)
+    panel_db.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(panel_db.parent, 0o700)
+
+    if health_db.exists():
+        print(f"skip: health database already exists: {health_db}")
+    else:
+        result = init_health_database(health_db, vault_dir)
+        print(f"created {result['health_db']} (schema v{result['schema_version']})")
+
+    if panel_db.exists():
+        print(f"skip: panel database already exists: {panel_db}")
+    else:
+        init_panel_db(SimpleNamespace(config={"PANEL_DB": str(panel_db)}))
+        os.chmod(panel_db, 0o600)
+        print(f"created {panel_db}")
+
+
+def main(argv):
+    if not argv:
+        print("usage: oha {panel|broker|init|flask ...}", file=sys.stderr)
+        return 2
+    cmd, rest = argv[0], argv[1:]
+    os.chdir(ROOT)
+    if cmd == "panel":
+        os.execvp("gunicorn", [
+            "gunicorn", "wsgi:app", "--workers", "2", "--timeout", "600",
+            "--bind", "0.0.0.0:8100", *rest,
+        ])
+    if cmd == "broker":
+        os.execvp(sys.executable, [sys.executable, f"{ROOT}/deploy/hermes-bridge", *rest])
+    if cmd == "init":
+        _init()
+        return 0
+    if cmd == "flask":
+        os.execvp("flask", ["flask", *rest])
+    if cmd in {"user-create", "user-list", "user-disable", "user-enable", "enroll-token"}:
+        os.execvp("flask", ["flask", cmd, *rest])
+    print(f"unknown command: {cmd}", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

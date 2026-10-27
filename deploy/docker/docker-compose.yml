@@ -1,0 +1,149 @@
+# Self-contained example stack: the panel, the hermes-bridge write broker,
+# and a one-off admin container, sharing the image built from the repository
+# root Dockerfile. Use this directly for local evaluation, or as the template
+# for a Portainer stack. See ../../docs/DOCKER.md for the full operator guide.
+#
+# Container names below (medical-oha-panel, medical-oha-broker) match what
+# this homelab's reverse proxy and monitoring already expect; rename them if
+# you're running more than one instance.
+name: oha
+
+services:
+  panel:
+    image: ${OHA_IMAGE:-ghcr.io/oglaf/open-health-atlas}:${OHA_TAG:-multi-user}
+    container_name: medical-oha-panel
+    command: ["panel"]
+    restart: unless-stopped
+    mem_limit: 512m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+    env_file:
+      - .env
+    environment:
+      HERMES_DATA_DIR: /data
+      HEALTH_DB: /data/health.db
+      USERS_ROOT: /data/users
+      VAULT_DIR: /data/vault
+      PANEL_DB: /state/panel.db
+      BRIDGE_SOCKET: /sock/bridge.sock
+      # No default: a stable, random, persistent value is required before
+      # first use (every restart would otherwise invalidate every session,
+      # passkey challenge and CSRF token). Set it in deploy/docker/.env.
+      PANEL_SECRET_KEY: ${PANEL_SECRET_KEY:?Set PANEL_SECRET_KEY in deploy/docker/.env (e.g. openssl rand -hex 32)}
+    volumes:
+      - oha-data:/data:ro
+      - oha-state:/state
+      - oha-socket:/sock
+    networks:
+      - proxy
+      - internal
+    depends_on:
+      broker:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8100/healthz', timeout=3).status == 200 else 1)
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    # Uncomment for local testing without a reverse proxy in front:
+    # ports:
+    #   - "127.0.0.1:5111:8100"
+
+  broker:
+    image: ${OHA_IMAGE:-ghcr.io/oglaf/open-health-atlas}:${OHA_TAG:-multi-user}
+    container_name: medical-oha-broker
+    command: ["broker"]
+    restart: unless-stopped
+    mem_limit: 384m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+    env_file:
+      - .env
+    environment:
+      HEALTH_DB: /data/health.db
+      HEALTH_VAULT: /data/vault
+      BRIDGE_SOCK: /sock/bridge.sock
+      BRIDGE_AUDIT: /audit/bridge.jsonl
+      BRIDGE_HEALTH: /app/toolkit/health.py
+      BRIDGE_HERMESCTL: /app/deploy/hermesctl
+      # Both containers run as the same image uid (1000); the privilege split
+      # is the read-only vs read-write volume mounts, not separate uids — so
+      # the broker is told to accept that uid directly rather than resolving
+      # a "panel" account via pwd, which does not exist in this image.
+      BRIDGE_ALLOWED_UID: "1000"
+      BRIDGE_USERS_ROOT: /data/users
+    volumes:
+      - oha-data:/data
+      - oha-socket:/sock
+      - oha-audit:/audit
+    networks:
+      - internal
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - import os,socket,sys; s=socket.socket(socket.AF_UNIX); s.settimeout(3); s.connect(os.environ.get("BRIDGE_SOCK", "/sock/bridge.sock")); s.close()
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Never started by default (`docker compose up` ignores it). Run one-off
+  # admin commands with, e.g.:
+  #   docker compose run --rm admin init
+  #   docker compose run --rm admin user-create alice --name Alice
+  #   docker compose run --rm admin enroll-token --user alice
+  admin:
+    image: ${OHA_IMAGE:-ghcr.io/oglaf/open-health-atlas}:${OHA_TAG:-multi-user}
+    profiles: ["admin"]
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+    env_file:
+      - .env
+    environment:
+      HERMES_DATA_DIR: /data
+      HEALTH_DB: /data/health.db
+      USERS_ROOT: /data/users
+      VAULT_DIR: /data/vault
+      PANEL_DB: /state/panel.db
+    volumes:
+      - oha-data:/data
+      - oha-state:/state
+    networks:
+      - internal
+
+networks:
+  # Published by the reverse proxy stack; join it to reach the panel over
+  # HTTPS. Not created here — must already exist (`docker network create proxy`
+  # or whatever your reverse-proxy compose project names it).
+  proxy:
+    external: true
+  internal:
+    driver: bridge
+
+volumes:
+  oha-data:
+  oha-state:
+  oha-socket:
+  oha-audit:

@@ -138,7 +138,7 @@ def test_recent_feed_reads_panel_audit(client):
         db = get_db()
         # Reads must not crowd write attempts out; failures remain explicit.
         for i in range(22):
-            db.execute("INSERT INTO audit_log(ts,event,detail) VALUES(?,?,?)", (
+            db.execute("INSERT INTO audit_log(ts,event,detail,user_id) VALUES(?,?,?,'owner')", (
                 i, "bridge.eat", json.dumps({"args": [f"meal-{i}"], "outcome": "exit:0"}),
             ))
         for i in range(30):
@@ -146,7 +146,7 @@ def test_recent_feed_reads_panel_audit(client):
                 ("bridge.labs", {"outcome": "exit:0"}),
                 ("bridge.outcome-associations", {"outcome": "exit:0"}),
             ):
-                db.execute("INSERT INTO audit_log(ts,event,detail) VALUES(?,?,?)", (
+                db.execute("INSERT INTO audit_log(ts,event,detail,user_id) VALUES(?,?,?,'owner')", (
                     100 + i, event, json.dumps(detail),
                 ))
         for event, detail in (
@@ -155,11 +155,11 @@ def test_recent_feed_reads_panel_audit(client):
             ("bridge.prep", {"outcome": "refused-client-flag"}),
             ("bridge.log", {"args": ["legacy-unconfirmed"]}),
         ):
-            db.execute("INSERT INTO audit_log(ts,event,detail) VALUES(?,?,?)", (
+            db.execute("INSERT INTO audit_log(ts,event,detail,user_id) VALUES(?,?,?,'owner')", (
                 150, event, json.dumps(detail),
             ))
         for detail in ("not JSON", "null", "[]"):
-            db.execute("INSERT INTO audit_log(ts,event,detail) VALUES(?,?,?)",
+            db.execute("INSERT INTO audit_log(ts,event,detail,user_id) VALUES(?,?,?,'owner')",
                        (200, "bridge.eat", detail))
         db.commit()
     r = client.get("/api/log/recent")

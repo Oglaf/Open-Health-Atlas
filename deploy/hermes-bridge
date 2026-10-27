@@ -513,8 +513,13 @@ class Handler(socketserver.StreamRequestHandler):
         self._send(handle(subcmd, args, peer_uid, stdin, user))
 
     def _send(self, obj):
-        self.wfile.write((json.dumps(obj) + "\n").encode("utf-8"))
-        self.wfile.flush()
+        try:
+            self.wfile.write((json.dumps(obj) + "\n").encode("utf-8"))
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            # The client went away (e.g. a container healthcheck that only
+            # connects to the socket). Nothing to deliver, nothing to log.
+            pass
 
 
 class Server(socketserver.ThreadingUnixStreamServer):

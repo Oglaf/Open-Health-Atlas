@@ -13,7 +13,7 @@ import re
 
 from flask import Blueprint, jsonify, request
 
-from app import bridge
+from app import bridge, users
 from app.panel_db import get_db
 
 bp = Blueprint("log", __name__, url_prefix="/api/log")
@@ -178,10 +178,16 @@ def recent():
     """Activity feed: panel-originated write attempts (panel.db's audit_log),
     newest first. Reads the panel's own state DB, not the health DB."""
     events = ["bridge." + command for command in ACTIVITY_WRITES]
+    # panel.db is shared by every user: the feed carries command arguments
+    # (readings, notes), so it must only ever show the caller's own rows.
+    user = users.current_user()
+    if user is None:
+        return jsonify(error="unauthenticated"), 401
     rows = get_db().execute(
         "SELECT ts, event, detail FROM audit_log"
-        f" WHERE event IN ({','.join('?' for _ in events)}) ORDER BY id DESC LIMIT 20",
-        events,
+        f" WHERE user_id = ? AND event IN ({','.join('?' for _ in events)})"
+        " ORDER BY id DESC LIMIT 20",
+        [user["id"], *events],
     )
     items = []
     for row in rows:
