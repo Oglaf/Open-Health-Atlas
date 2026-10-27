@@ -147,6 +147,66 @@ def test_active_energy_summed():
     assert days["2026-07-17"]["metrics"]["active_energy_kcal"] == 420.0
 
 
+# ── interval types: one source per day, wearables first (issue #26) ────────
+
+def _src_dp(start, n, platform, form=None, maker=None):
+    ds = {"recordingMethod": "PASSIVELY_MEASURED", "platform": platform}
+    if form:
+        ds["device"] = {"formFactor": form, "manufacturer": maker or "Example"}
+    return {"steps": {"count": str(n)}, "dataSource": ds,
+            "interval": {"startTime": start, "endTime": start}}
+
+
+def test_steps_prefer_wearable_over_phone_same_day():
+    m = _load()
+    notes = []
+    days, warns = m.transform({"steps": [
+        _src_dp("2026-07-17T08:00:00+02:00", 4000, "FITBIT", "WATCH"),
+        _src_dp("2026-07-17T17:00:00+02:00", 3000, "FITBIT", "WATCH"),
+        _src_dp("2026-07-17T08:05:00+02:00", 9000, "HEALTH_CONNECT", "PHONE"),
+    ]}, notes)
+    assert warns == []
+    assert days["2026-07-17"]["metrics"]["steps"] == 7000   # watch only
+    assert notes == ["steps 2026-07-17: used FITBIT/WATCH/Example; "
+                     "left out HEALTH_CONNECT/PHONE/Example"]
+
+
+def test_steps_fall_back_to_other_devices_without_wearable():
+    m = _load()
+    days, _ = m.transform({"steps": [
+        _src_dp("2026-07-17T08:00:00+02:00", 5000, "FITBIT", "WATCH"),
+        _src_dp("2026-07-18T09:00:00+02:00", 2500, "HEALTH_CONNECT", "PHONE"),
+        _src_dp("2026-07-18T19:00:00+02:00", 1500, "HEALTH_CONNECT", "PHONE"),
+    ]})
+    assert days["2026-07-17"]["metrics"]["steps"] == 5000
+    assert days["2026-07-18"]["metrics"]["steps"] == 4000   # phone, summed
+
+
+def test_steps_never_summed_across_unlabelled_platforms():
+    """The reported shape carries only platform + recordingMethod: two
+    platforms on one day are kept apart and the larger total is used."""
+    m = _load()
+    days, _ = m.transform({"steps": [
+        _src_dp("2026-07-17T08:00:00+02:00", 6200, "FITBIT"),
+        _src_dp("2026-07-17T08:00:00+02:00", 5900, "HEALTH_CONNECT"),
+    ]})
+    assert days["2026-07-17"]["metrics"]["steps"] == 6200
+
+
+def test_active_energy_uses_the_same_source_rule():
+    m = _load()
+    dp = lambda start, kcal, platform, form: {
+        "activeEnergyBurned": {"caloriesKcal": kcal},
+        "dataSource": {"platform": platform,
+                       "device": {"formFactor": form}},
+        "interval": {"startTime": start}}
+    days, _ = m.transform({"active-energy-burned": [
+        dp("2026-07-17T08:00:00+02:00", 300.0, "HEALTH_CONNECT", "RING"),
+        dp("2026-07-17T08:00:00+02:00", 410.0, "FITBIT", "PHONE"),
+    ]})
+    assert days["2026-07-17"]["metrics"]["active_energy_kcal"] == 300.0
+
+
 # ── weight ──────────────────────────────────────────────────────────────────
 
 def test_weight_grams_to_kg_latest_per_date():
@@ -158,6 +218,24 @@ def test_weight_grams_to_kg_latest_per_date():
          "interval": {"startTime": "2026-07-17T21:00:00+02:00"}},
     ]})
     assert days["2026-07-17"]["weight_kg"] == 67.2
+
+
+def test_weight_v4_sample_time_shape():
+    """Issue #26: the live API returns weight.sampleTime, not an interval."""
+    m = _load()
+    dp = lambda phys, g: {
+        "name": "users/me/dataTypes/weight/dataPoints/x",
+        "dataSource": {"recordingMethod": "MANUAL", "platform": "HEALTH_CONNECT"},
+        "weight": {"sampleTime": {"physicalTime": phys, "utcOffset": "7200s"},
+                   "weightGrams": g}}
+    days, warns = m.transform({"weight": [
+        dp("2026-07-17T05:00:00Z", "67400"),
+        dp("2026-07-17T19:00:00Z", "67200"),
+        dp("2026-07-16T22:30:00Z", "68000"),   # 00:30 local on the 17th
+    ]})
+    assert warns == []
+    assert days["2026-07-17"]["weight_kg"] == 67.2
+    assert "2026-07-16" not in days
 
 
 # ── resilience ──────────────────────────────────────────────────────────────

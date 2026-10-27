@@ -69,12 +69,18 @@ DAILY_TYPES = {
                                ["averageBreathsPerMinute", "breathsPerMinute"],
                                "respiratory_rate"),
 }
-INTERVAL_TYPES = {   # summed per local date (client-side daily total)
+INTERVAL_TYPES = {   # summed per local date within ONE source (see below)
     "steps": ("steps", ["count"], "steps"),
     "active-energy-burned": ("activeEnergyBurned",
                              ["caloriesKcal", "kcal"], "active_energy_kcal"),
 }
 ALL_TYPES = ["sleep", *DAILY_TYPES, *INTERVAL_TYPES, "weight"]
+# Worn-on-body form factors (DataSource.Device.formFactor). On any day where
+# one of these reported steps/active energy, only wearable data is used;
+# otherwise the other devices are used. Either way exactly one source is
+# counted per day, so a phone and a watch never add up to a double total.
+WEARABLE_FORM_FACTORS = {"WATCH", "FITNESS_BAND", "RING", "CHEST_STRAP",
+                         "HEAD_MOUNTED"}
 # Only *.readonly, and only the three buckets these types need.
 SCOPES = ("https://www.googleapis.com/auth/googlehealth.sleep.readonly "
           "https://www.googleapis.com/auth/googlehealth.activity_and_fitness.readonly "
@@ -195,6 +201,31 @@ def _first(d, keys):
     return None
 
 
+def _source(dp):
+    """dataPoint → (is_wearable, source key, readable label).
+    The key separates platforms (FITBIT, HEALTH_CONNECT, ...) and devices, so
+    two apps reporting the same walk stay distinct. Points without a
+    dataSource share one key and are summed together as before. The label
+    leaves out the user-chosen device name; it is only used in log lines."""
+    ds = dp.get("dataSource") or {}
+    dev = ds.get("device") or {}
+    form = str(dev.get("formFactor") or "")
+    key = (str(ds.get("platform") or ""), form,
+           str(dev.get("manufacturer") or ""), str(dev.get("displayName") or ""))
+    label = "/".join(part for part in key[:3] if part) or "unlabelled source"
+    return form in WEARABLE_FORM_FACTORS, key, label
+
+
+def _pick_source(by_source):
+    """{key: {wearable, label, total}} for one type and day → (chosen, rest).
+    Wearables win when present; within the winning group the source with the
+    largest daily total is used (ties broken by label, so runs are stable)."""
+    pool = [s for s in by_source.values() if s["wearable"]] \
+        or list(by_source.values())
+    chosen = sorted(pool, key=lambda s: (-s["total"], s["label"]))[0]
+    return chosen, [s for s in by_source.values() if s is not chosen]
+
+
 STAGE_COLS = {"DEEP": "deep_min", "REM": "rem_min",
               "LIGHT": "light_min", "AWAKE": "awake_min"}
 
@@ -234,12 +265,15 @@ def _sleep_day(dp):
     return end.date().isoformat(), out
 
 
-def transform(by_type):
+def transform(by_type, notes=None):
     """{data-type: [dataPoint, ...]} → ({date: day-dict}, [warnings]).
     Day-dicts are exactly the import-google-health sections; every
     unrecognized shape becomes a warning string, never an exception and
-    never a fabricated zero."""
+    never a fabricated zero. If `notes` is a list, one line is appended for
+    every day where steps/active energy came from more than one source,
+    naming (not quantifying) the source used and the ones left out."""
     days, warns = {}, []
+    interval = {}   # (type, date) → {source key: {wearable, label, total}}
 
     def day(d):
         return days.setdefault(d, {})
@@ -284,11 +318,21 @@ def transform(by_type):
                                  f"({sorted(dp.keys())})")
                     continue
                 d = t.date().isoformat()
-                metrics(d)[col] = round(metrics(d).get(col, 0) + v, 2)
+                wearable, key, label = _source(dp)
+                src = interval.setdefault((dt, d), {}).setdefault(
+                    key, {"wearable": wearable, "label": label, "total": 0.0})
+                src["total"] += v
             elif dt == "weight":
                 body = dp.get("weight") or {}
-                iv = dp.get("interval") or body.get("interval") or {}
-                t = _ts_local(iv.get("startTime"), iv.get("startUtcOffset"))
+                # API v4 weight is a point-in-time sample
+                # (weight.sampleTime.{physicalTime, utcOffset}), not an
+                # interval — the same field fetch_type() filters on. The
+                # interval path stays as a fallback for older shapes.
+                st = body.get("sampleTime") or dp.get("sampleTime") or {}
+                t = _ts_local(st.get("physicalTime"), st.get("utcOffset"))
+                if t is None:
+                    iv = dp.get("interval") or body.get("interval") or {}
+                    t = _ts_local(iv.get("startTime"), iv.get("startUtcOffset"))
                 g = _num(body.get("weightGrams"))
                 if t is None or g is None:
                     warns.append(f"weight: unrecognized dataPoint shape "
@@ -301,6 +345,13 @@ def transform(by_type):
                     day(d)["weight_kg"] = round(g / 1000.0, 2)
             else:
                 warns.append(f"unknown data type {dt!r} — not mapped")
+    for (dt, d), by_source in sorted(interval.items()):
+        chosen, rest = _pick_source(by_source)
+        metrics(d)[INTERVAL_TYPES[dt][2]] = round(chosen["total"], 2)
+        if rest and notes is not None:   # labels only — no health values
+            left_out = ", ".join(sorted(s["label"] for s in rest))
+            notes.append(f"{dt} {d}: used {chosen['label']}; "
+                         f"left out {left_out}")
     for d in days.values():
         d.pop("_weight_at", None)
     return days, warns
@@ -475,7 +526,10 @@ def main(state=None):
     for e in errors:
         print(f"WARN fetch failed — {e}", file=sys.stderr)
 
-    days, warns = transform(by_type)
+    notes = []
+    days, warns = transform(by_type, notes)
+    for n in notes:
+        print(f"source choice — {n}")
     state["partial"] = bool(errors or warns)
     if warns:
         state["warning_codes"].add("unrecognized_shape")
