@@ -3,7 +3,7 @@ from datetime import date
 
 from flask import Blueprint, abort, jsonify, redirect, render_template, url_for
 
-from app import db_read
+from app import db_read, users
 
 bp = Blueprint("core", __name__)
 
@@ -242,6 +242,19 @@ def insights_conversations():
 def data():
     return render_template("data.html")
 
+
+
+@bp.get("/admin")
+def admin():
+    """Admin panel (docs/MULTI_USER.md "Admin UI"): add and manage family
+    members from the web UI — no CLI or assistant required. Admin role only;
+    `require_login` (app/__init__.py) already requires an active session, so
+    this only adds the role check (a logged-in member gets 403, not the
+    page)."""
+    user = users.current_user()
+    if user is None or user["role"] != "admin":
+        abort(403)
+    return render_template("admin.html")
 
 
 @bp.get("/healthz")

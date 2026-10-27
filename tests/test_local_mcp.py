@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import runpy
+import sqlite3
 import subprocess
 import sys
 
@@ -35,6 +36,32 @@ def _parameters(database, tmp_path):
     )
 
 
+def _multi_user_parameters(tmp_path, *, users_root, owner_database=None, panel_db=None):
+    args = [str(SERVER), "--users-root", str(users_root), "--timezone", "UTC"]
+    if owner_database is not None:
+        args += ["--owner-database", str(owner_database)]
+    if panel_db is not None:
+        args += ["--panel-db", str(panel_db)]
+    return mcp.StdioServerParameters(
+        command=sys.executable,
+        args=args,
+        cwd=str(tmp_path),
+        env={"PYTHONDONTWRITEBYTECODE": "1", "OPENHEALTHATLAS_NATIVE_STATS": "off",
+             "HEALTH_DB": str(tmp_path / "unrelated-never-created.db"),
+             "HERMES_TIMEZONE": "Europe/Paris"},
+    )
+
+
+def _make_fictional_user_db(path: Path, anchor_date: str):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "make_demo_db.py"),
+         "--output", str(path), "--anchor-date", anchor_date],
+        check=True, capture_output=True, timeout=60,
+        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+    )
+
+
 async def _call(session, name, arguments):
     response = await session.call_tool(name, arguments)
     assert len(response.content) == 1
@@ -45,13 +72,14 @@ async def _call(session, name, arguments):
     return body, response.isError
 
 
-async def _finish(session, receipt):
+async def _finish(session, receipt, *, user=None):
     assert receipt["status"] in {"queued", "running", "completed"}
     task_id = receipt["task_id"]
+    arguments = {"task_id": task_id, "wait_seconds": 5}
+    if user is not None:
+        arguments["user"] = user
     for _ in range(12):
-        status, error = await _call(session, "health_task_status", {
-            "task_id": task_id, "wait_seconds": 5,
-        })
+        status, error = await _call(session, "health_task_status", arguments)
         assert not error
         if status["status"] == "completed":
             assert status["started_at"] <= status["completed_at"]
@@ -294,3 +322,185 @@ def test_oversize_worker_output_is_bounded_and_reaped(tmp_path, monkeypatch):
     for pid in owned_pids:
         with pytest.raises(ProcessLookupError):
             os.kill(pid, 0)
+
+
+def test_multi_user_isolates_databases_and_refuses_unknown_or_escaping_ids(tmp_path):
+    users_root = tmp_path / "users"
+    users_root.mkdir()
+    alice_db = users_root / "alice" / "health.db"
+    bob_db = users_root / "bob" / "health.db"
+    _make_fictional_user_db(alice_db, "2026-06-30")
+    _make_fictional_user_db(bob_db, "2026-05-31")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (users_root / "evil").symlink_to(outside, target_is_directory=True)
+
+    async def exercise():
+        async with stdio_client(_multi_user_parameters(tmp_path, users_root=users_root)) as (reader, writer):
+            async with mcp.ClientSession(reader, writer, read_timeout_seconds=timedelta(seconds=30)) as session:
+                await session.initialize()
+                listed = (await session.list_tools()).tools
+                assert {tool.name for tool in listed} == {
+                    "health_catalog", "health_query", "health_analyze",
+                    "health_evidence", "health_task_status",
+                }
+                for tool in listed:
+                    assert "user" in tool.inputSchema["required"]
+                    assert tool.inputSchema["additionalProperties"] is False
+
+                alice, error = await _call(session, "health_query", {
+                    "user": "alice",
+                    "feature_keys": ["sleep.duration_hours"],
+                    "range": {"from": "2026-06-24", "to": "2026-06-30"},
+                    "view": "summary",
+                })
+                assert not error and alice["status"] == "ok"
+
+                bob, error = await _call(session, "health_query", {
+                    "user": "bob",
+                    "feature_keys": ["sleep.duration_hours"],
+                    "range": {"from": "2026-05-25", "to": "2026-05-31"},
+                    "view": "summary",
+                })
+                assert not error and bob["status"] == "ok"
+                # Separate per-user databases, so separate dataset identities.
+                assert alice["dataset_id"] != bob["dataset_id"]
+                assert str(alice_db) not in json.dumps(alice)
+                assert str(bob_db) not in json.dumps(bob)
+
+                missing_user, error = await _call(session, "health_query", {
+                    "feature_keys": ["sleep.duration_hours"],
+                    "range": {"from": "2026-06-24", "to": "2026-06-30"},
+                    "view": "summary",
+                })
+                assert error and missing_user["status"] == "refused"
+
+                for bad_user in ("ghost", "../etc", "alice/x", "Alice", "evil", "owner"):
+                    bad, error = await _call(session, "health_query", {
+                        "user": bad_user,
+                        "feature_keys": ["sleep.duration_hours"],
+                        "range": {"from": "2026-06-24", "to": "2026-06-30"},
+                        "view": "summary",
+                    })
+                    assert error and bad["status"] == "refused"
+                    assert str(outside) not in json.dumps(bad)
+
+                # A client-supplied path/database is still never honored.
+                smuggled, error = await _call(session, "health_query", {
+                    "user": "alice", "database": "/untrusted/model/path",
+                    "feature_keys": ["sleep.duration_hours"],
+                    "range": {"from": "2026-06-24", "to": "2026-06-30"},
+                })
+                assert error and smuggled["status"] == "refused"
+                assert "/untrusted/model/path" not in json.dumps(smuggled)
+
+    asyncio.run(exercise())
+
+
+def test_multi_user_panel_db_gates_status_and_fails_closed_when_unreadable(tmp_path):
+    users_root = tmp_path / "users"
+    users_root.mkdir()
+    alice_db = users_root / "alice" / "health.db"
+    bob_db = users_root / "bob" / "health.db"
+    _make_fictional_user_db(alice_db, "2026-06-30")
+    _make_fictional_user_db(bob_db, "2026-05-31")
+    owner_db = tmp_path / "owner-health.db"
+    _make_fictional_user_db(owner_db, "2026-04-30")
+
+    panel_db = tmp_path / "panel.db"
+    con = sqlite3.connect(panel_db)
+    con.execute("CREATE TABLE users (id TEXT PRIMARY KEY, status TEXT NOT NULL)")
+    con.executemany("INSERT INTO users(id, status) VALUES (?, ?)", [
+        ("alice", "active"), ("bob", "disabled"), ("owner", "active"),
+    ])
+    con.commit()
+    con.close()
+
+    async def exercise(parameters, *, alice_ok, bob_ok, owner_ok):
+        async with stdio_client(parameters) as (reader, writer):
+            async with mcp.ClientSession(reader, writer, read_timeout_seconds=timedelta(seconds=30)) as session:
+                await session.initialize()
+                for user, expect_ok in (("alice", alice_ok), ("bob", bob_ok), ("owner", owner_ok)):
+                    result, error = await _call(session, "health_query", {
+                        "user": user,
+                        "feature_keys": ["sleep.duration_hours"],
+                        "range": {"from": "2026-01-01", "to": "2026-06-30"},
+                        "view": "summary",
+                    })
+                    if expect_ok:
+                        assert not error and result["status"] in {"ok", "insufficient_data"}
+                    else:
+                        assert error and result["status"] == "refused"
+
+    asyncio.run(exercise(
+        _multi_user_parameters(tmp_path, users_root=users_root, owner_database=owner_db, panel_db=panel_db),
+        alice_ok=True, bob_ok=False, owner_ok=True,
+    ))
+
+    corrupt_panel = tmp_path / "corrupt-panel.db"
+    corrupt_panel.write_bytes(b"not a sqlite database")
+    asyncio.run(exercise(
+        _multi_user_parameters(tmp_path, users_root=users_root, owner_database=owner_db, panel_db=corrupt_panel),
+        alice_ok=False, bob_ok=False, owner_ok=False,
+    ))
+
+
+def test_multi_user_task_ids_and_evidence_do_not_cross_users(tmp_path):
+    users_root = tmp_path / "users"
+    users_root.mkdir()
+    alice_db = users_root / "alice" / "health.db"
+    bob_db = users_root / "bob" / "health.db"
+    _make_fictional_user_db(alice_db, "2026-06-30")
+    _make_fictional_user_db(bob_db, "2026-05-31")
+
+    async def exercise():
+        async with stdio_client(_multi_user_parameters(tmp_path, users_root=users_root)) as (reader, writer):
+            async with mcp.ClientSession(reader, writer, read_timeout_seconds=timedelta(seconds=30)) as session:
+                await session.initialize()
+
+                alice_query, error = await _call(session, "health_query", {
+                    "user": "alice",
+                    "feature_keys": ["sleep.duration_hours"],
+                    "range": {"from": "2026-06-24", "to": "2026-06-30"},
+                    "view": "summary",
+                })
+                assert not error
+
+                # Alice's evidence_refs embed her dataset identity in result_id;
+                # replaying them as Bob must not silently succeed on his data.
+                cross_receipt, error = await _call(session, "health_evidence", {
+                    "user": "bob", "evidence_refs": alice_query["evidence_refs"],
+                })
+                assert not error
+                assert cross_receipt["status"] in {"queued", "running", "completed"}
+                cross_completed, error = None, None
+                for _ in range(12):
+                    cross_completed, error = await _call(session, "health_task_status", {
+                        "user": "bob", "task_id": cross_receipt["task_id"], "wait_seconds": 5,
+                    })
+                    if cross_completed["status"] == "completed":
+                        break
+                assert cross_completed["status"] == "completed" and error
+                assert cross_completed["result"]["status"] == "refused"
+                assert cross_completed["result"]["error"]["code"] == "stale_evidence"
+
+                analyze_receipt, error = await _call(session, "health_analyze", {
+                    "user": "alice", "outcome_key": "subjective.energy",
+                    "exposure_keys": ["sleep.duration_hours"],
+                    "range": {"from": "2026-03-02", "to": "2026-06-30"},
+                    "mode": "ordinal", "top": 1,
+                })
+                assert not error
+                task_id = analyze_receipt["task_id"]
+
+                # The task id Alice holds must be invisible under Bob's identity.
+                bob_sees_alice_task, error = await _call(session, "health_task_status", {
+                    "user": "bob", "task_id": task_id, "wait_seconds": 1,
+                })
+                assert error and bob_sees_alice_task["status"] == "refused"
+
+                # Alice can still read her own task through to completion.
+                alice_result = await _finish(session, analyze_receipt, user="alice")
+                assert alice_result["status"] in {"ok", "insufficient_data"}
+
+    asyncio.run(exercise())

@@ -10,12 +10,15 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from collections import OrderedDict
 from datetime import datetime, timezone as utc_timezone
 import json
 import hashlib
 import os
+import re
 import secrets
 import signal
+import sqlite3
 import time
 from pathlib import Path
 import sys
@@ -26,9 +29,17 @@ MAX_REQUEST_BYTES = 131_072
 MAX_RESULT_BYTES = 1_048_576
 MAX_TOOL_BYTES = MAX_RESULT_BYTES + 4096
 WORKER_TIMEOUT_SECONDS = 570
+MAX_CACHED_SURFACES = 32
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "toolkit"))
+
+# Multi-user mode (see docs/MULTI_USER.md): same id shape the broker accepts
+# in deploy/hermes-bridge's USER_ID_RE. The client never supplies a path; this
+# is only a server-side lookup key into --users-root.
+USER_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}\Z")
+OWNER_USER_ID = "owner"
+USER_FIELD = {"type": "string", "pattern": r"^[a-z0-9][a-z0-9_-]{0,31}$", "maxLength": 32}
 
 
 def _object(properties: dict[str, Any], required: tuple[str, ...] = ()) -> dict:
@@ -108,6 +119,38 @@ DEFAULTS = {
     "health_analyze": {"mode": "all", "interactions": False, "min_n": 30, "top": 10},
     "health_evidence": {"detail": "summary"},
 }
+
+
+def _with_user(schema: dict) -> dict:
+    """The multi-user variant of one tool's schema: adds a required `user`
+    lookup key and nothing else. additionalProperties stays False."""
+    return {
+        **schema,
+        "properties": {**schema["properties"], "user": USER_FIELD},
+        "required": [*schema["required"], "user"],
+    }
+
+
+MULTI_USER_TOOL_SCHEMAS = {name: _with_user(schema) for name, schema in TOOL_SCHEMAS.items()}
+
+
+def _task_status_schema(multi_user: bool) -> dict:
+    properties = {
+        "task_id": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+        "wait_seconds": {"type": "integer", "minimum": 0, "maximum": 20, "default": 5},
+    }
+    required: tuple[str, ...] = ("task_id",)
+    if multi_user:
+        properties["user"] = USER_FIELD
+        required = (*required, "user")
+    return _object(properties, required)
+
+
+TASK_STATUS_DESCRIPTION = (
+    "Wait up to wait_seconds for an analysis/evidence task. Completed result "
+    "is a snapshot in result; a new invocation checks current data. No health "
+    "records change."
+)
 
 
 def encode_result(value):
@@ -268,7 +311,147 @@ class AnalysisTasks:
             self._discard(task_id)
 
 
-def create_server(surface, tasks):
+_PANEL_READ_ACTIONS = {
+    getattr(sqlite3, "SQLITE_READ", 20),
+    getattr(sqlite3, "SQLITE_SELECT", 21),
+    getattr(sqlite3, "SQLITE_FUNCTION", 31),
+    getattr(sqlite3, "SQLITE_RECURSIVE", 33),
+}
+
+
+def _panel_authorizer(action, _arg1, _arg2, _db_name, _trigger):
+    return sqlite3.SQLITE_OK if action in _PANEL_READ_ACTIONS else sqlite3.SQLITE_DENY
+
+
+class UserResolver:
+    """Maps a client-supplied `user` id to that user's health.db, or refuses.
+
+    `user` is a lookup key only; the client can never supply a path. Mirrors
+    deploy/hermes-bridge's `_resolve_user_env`: same id pattern, realpath +
+    commonpath containment against --users-root (no traversal, no symlink
+    escape), and the directory must already exist with a health.db in it.
+    `owner` is special: it maps to --owner-database (outside users-root,
+    the legacy single-user database) and is otherwise unknown. When
+    --panel-db is configured, every id (owner included) must also have an
+    'active' row in its `users` table; an unreadable panel.db fails closed
+    for every id, never silently falling back to "allow".
+    """
+
+    def __init__(self, users_root: Path, owner_database: Path | None, panel_db: Path | None):
+        self.users_root = os.path.realpath(users_root)
+        self.owner_database = owner_database
+        self.panel_db = panel_db
+
+    def _panel_allows(self, user: str) -> bool:
+        if self.panel_db is None:
+            return True
+        try:
+            con = sqlite3.connect(f"file:{self.panel_db}?mode=ro", uri=True)
+            try:
+                con.execute("PRAGMA query_only=ON")
+                con.set_authorizer(_panel_authorizer)
+                row = con.execute(
+                    "SELECT status FROM users WHERE id=?", (user,),
+                ).fetchone()
+            finally:
+                con.close()
+        except Exception:
+            return False
+        return row is not None and row[0] == "active"
+
+    def resolve(self, user: object) -> Path | None:
+        if not isinstance(user, str) or USER_ID_RE.fullmatch(user) is None:
+            return None
+        if not self._panel_allows(user):
+            return None
+        if user == OWNER_USER_ID:
+            if self.owner_database is None:
+                return None
+            database = Path(self.owner_database)
+            return database if database.is_file() else None
+        user_dir = os.path.realpath(os.path.join(self.users_root, user))
+        if (
+            user_dir == self.users_root
+            or os.path.commonpath([self.users_root, user_dir]) != self.users_root
+            or not os.path.isdir(user_dir)
+        ):
+            return None
+        database = Path(user_dir) / "health.db"
+        return database if database.is_file() else None
+
+
+class SingleUserTarget:
+    """One owned database for the life of the process — today's behavior,
+    unchanged tool schemas, selected by --database."""
+
+    multi_user = False
+
+    def __init__(self, surface, tasks: AnalysisTasks):
+        self.surface = surface
+        self.tasks = tasks
+        self.schemas = TOOL_SCHEMAS
+        self.task_status_schema = _task_status_schema(False)
+
+    def resolve(self, arguments: dict):
+        return self.surface, self.tasks, arguments
+
+    async def close(self):
+        await self.tasks.close()
+
+
+class MultiUserTarget:
+    """One process serves any user named per call, selected by --users-root.
+
+    Per-user state is isolated: a LocalSurface (bounded, lazily created) per
+    resolved database, and a separate AnalysisTasks registry per user id, so
+    a task id minted for one user is never visible to another (it simply
+    is not in that user's own registry) and one user's heavy analysis never
+    blocks another's.
+    """
+
+    multi_user = True
+
+    def __init__(self, resolver: UserResolver, timezone: str):
+        self.resolver = resolver
+        self.timezone = timezone
+        self.schemas = MULTI_USER_TOOL_SCHEMAS
+        self.task_status_schema = _task_status_schema(True)
+        self._surfaces: OrderedDict[str, Any] = OrderedDict()
+        self._tasks_by_user: dict[str, AnalysisTasks] = {}
+
+    def _surface_for(self, database: Path):
+        key = str(database)
+        surface = self._surfaces.get(key)
+        if surface is not None:
+            self._surfaces.move_to_end(key)
+            return surface
+        from hermes_insights.local_surface import LocalSurface
+        surface = LocalSurface(database=database, timezone=self.timezone)
+        self._surfaces[key] = surface
+        if len(self._surfaces) > MAX_CACHED_SURFACES:
+            self._surfaces.popitem(last=False)
+        return surface
+
+    def _tasks_for(self, user: str, database: Path) -> AnalysisTasks:
+        tasks = self._tasks_by_user.get(user)
+        if tasks is None:
+            tasks = AnalysisTasks(database, self.timezone)
+            self._tasks_by_user[user] = tasks
+        return tasks
+
+    def resolve(self, arguments: dict):
+        user = arguments.get("user")
+        database = self.resolver.resolve(user)
+        if database is None:
+            return None
+        rest = {key: value for key, value in arguments.items() if key != "user"}
+        return self._surface_for(database), self._tasks_for(user, database), rest
+
+    async def close(self):
+        await asyncio.gather(*(tasks.close() for tasks in self._tasks_by_user.values()))
+
+
+def create_server(target):
     # Import lazily: --help and the product itself do not need the optional SDK.
     from mcp import types
     from mcp.server import Server
@@ -293,14 +476,11 @@ def create_server(surface, tasks):
             annotations=types.ToolAnnotations(
                 readOnlyHint=True, destructiveHint=False, openWorldHint=False,
             ),
-        ) for name, schema in TOOL_SCHEMAS.items()]
+        ) for name, schema in target.schemas.items()]
         tools.append(types.Tool(
             name="health_task_status",
-            description="Wait up to wait_seconds for an analysis/evidence task. Completed result is a snapshot in result; a new invocation checks current data. No health records change.",
-            inputSchema=_object({
-                "task_id": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
-                "wait_seconds": {"type": "integer", "minimum": 0, "maximum": 20, "default": 5},
-            }, ("task_id",)),
+            description=TASK_STATUS_DESCRIPTION,
+            inputSchema=target.task_status_schema,
             annotations=types.ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False),
         ))
         return tools
@@ -308,24 +488,31 @@ def create_server(surface, tasks):
     @server.call_tool(validate_input=False)
     async def call_tool(name: str, arguments: dict):
         # Closed validators own value validation. No SDK coercion or SDK
-        # exception strings may replace that boundary.
+        # exception strings may replace that boundary. In multi-user mode,
+        # `target.resolve` is also the ONLY place `user` is interpreted: it
+        # never reaches the operation-specific validators below.
         try:
             encoded_request = json.dumps(arguments, allow_nan=False, separators=(",", ":"))
             if len(encoded_request.encode("utf-8")) > MAX_REQUEST_BYTES:
                 raise ValueError("request too large")
+            if not isinstance(arguments, dict):
+                raise ValueError("invalid arguments")
+            resolved = target.resolve(arguments)
+            if resolved is None:
+                raise ValueError("unknown user")
+            surface, tasks, rest = resolved
             if name == "health_task_status":
-                if (not isinstance(arguments, dict)
-                        or not {"task_id"} <= arguments.keys() <= {"task_id", "wait_seconds"}
-                        or not isinstance(arguments["task_id"], str)
-                        or len(arguments["task_id"]) != 32
-                        or type(arguments.get("wait_seconds", 5)) is not int
-                        or not 0 <= arguments.get("wait_seconds", 5) <= 20):
+                if (not {"task_id"} <= rest.keys() <= {"task_id", "wait_seconds"}
+                        or not isinstance(rest["task_id"], str)
+                        or len(rest["task_id"]) != 32
+                        or type(rest.get("wait_seconds", 5)) is not int
+                        or not 0 <= rest.get("wait_seconds", 5) <= 20):
                     raise ValueError("invalid task arguments")
-                result = await tasks.wait(arguments["task_id"], arguments.get("wait_seconds", 5))
+                result = await tasks.wait(rest["task_id"], rest.get("wait_seconds", 5))
             else:
-                if name not in TOOL_SCHEMAS or not isinstance(arguments, dict):
+                if name not in TOOL_SCHEMAS:
                     raise ValueError("unavailable operation")
-                request = {"operation": name, "arguments": {**DEFAULTS[name], **arguments}}
+                request = {"operation": name, "arguments": {**DEFAULTS[name], **rest}}
                 if name in {"health_analyze", "health_evidence"}:
                     result = tasks.submit(request)
                 else:
@@ -347,11 +534,10 @@ def create_server(surface, tasks):
     return server
 
 
-async def serve(surface, database: Path, timezone: str):
+async def serve(target):
     from mcp.server.stdio import stdio_server
 
-    tasks = AnalysisTasks(database, timezone)
-    server = create_server(surface, tasks)
+    server = create_server(target)
     loop = asyncio.get_running_loop()
     running = asyncio.current_task()
     loop.add_signal_handler(signal.SIGTERM, running.cancel)
@@ -359,30 +545,51 @@ async def serve(surface, database: Path, timezone: str):
         async with stdio_server() as (read_stream, write_stream):
             await server.run(read_stream, write_stream, server.create_initialization_options())
     finally:
-        await tasks.close()
+        await target.close()
         loop.remove_signal_handler(signal.SIGTERM)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--database", required=True, type=Path, help="Existing local health database")
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--database", type=Path, help="Existing local health database (single-user mode)")
+    mode.add_argument("--users-root", type=Path, help=(
+        "Directory with one subdirectory per user, each containing that "
+        "user's health.db (multi-user mode; see docs/MULTI_USER.md)"
+    ))
+    parser.add_argument("--owner-database", type=Path, help=(
+        "Legacy single-user health.db mapped to the reserved 'owner' id; "
+        "only meaningful with --users-root"
+    ))
+    parser.add_argument("--panel-db", type=Path, help=(
+        "The panel's users table, opened strictly read-only, gating which "
+        "users are active; only meaningful with --users-root"
+    ))
     parser.add_argument("--timezone", default="UTC", help="Calendar timezone (default: UTC)")
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.users_root is None and (args.owner_database is not None or args.panel_db is not None):
+        parser.error("--owner-database and --panel-db require --users-root")
     if args.worker:
         # Retain a deadline even if the owning stdio process is killed abruptly.
         signal.alarm(WORKER_TIMEOUT_SECONDS)
     try:
-        from hermes_insights.local_surface import LocalSurface
-        surface = LocalSurface(database=args.database, timezone=args.timezone)
-        if args.worker:
-            raw = sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)
-            if not raw or len(raw) > MAX_REQUEST_BYTES:
-                raise ValueError("invalid request size")
-            sys.stdout.write(encode_result(execute_request(surface, json.loads(raw))))
-            signal.alarm(0)
+        if args.worker or args.database is not None:
+            from hermes_insights.local_surface import LocalSurface
+            surface = LocalSurface(database=args.database, timezone=args.timezone)
+            if args.worker:
+                raw = sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)
+                if not raw or len(raw) > MAX_REQUEST_BYTES:
+                    raise ValueError("invalid request size")
+                sys.stdout.write(encode_result(execute_request(surface, json.loads(raw))))
+                signal.alarm(0)
+            else:
+                target = SingleUserTarget(surface, AnalysisTasks(Path(surface.database), args.timezone))
+                asyncio.run(serve(target))
         else:
-            asyncio.run(serve(surface, Path(surface.database), args.timezone))
+            resolver = UserResolver(args.users_root, args.owner_database, args.panel_db)
+            target = MultiUserTarget(resolver, args.timezone)
+            asyncio.run(serve(target))
     except (asyncio.CancelledError, KeyboardInterrupt):
         return 0
     except ImportError:

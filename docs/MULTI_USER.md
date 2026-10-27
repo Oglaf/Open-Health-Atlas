@@ -25,15 +25,30 @@ In:
 - Per-request user on `g`; `db_read.get_health_db()`, `snapshot()`, vault lookups resolve per user.
 - Bridge protocol carries `user`; broker resolves and validates it; audit records include it.
 - Admin CLI: `flask user-create`, `user-list`, `user-disable`, `enroll-token --user`.
+- Admin web UI (`/admin`, admin role only): add/manage family members without
+  the CLI — see "Admin UI" under Operator guide below.
 - Multi-user passkey enrollment and login; sessions bound to a user; disabled users cannot sign in and their sessions stop working.
 - Per-user health DB initialisation (reuse `scripts/init_hermes.py` logic).
 - Cross-user isolation tests: user A can never read, write, export, or poll jobs/chat of user B.
+- The standalone stdio MCP server (`scripts/openhealthatlas_mcp.py`): an
+  optional `--users-root` mode lets one MCP entry (one Hermes profile) serve
+  every member of the family. See
+  [docs/LOCAL_MCP.md "Multi-user mode"](LOCAL_MCP.md#multi-user-mode) for
+  configuration and [tests/test_local_mcp.py](../tests/test_local_mcp.py) /
+  [tests/test_local_mcp_multi_user.py](../tests/test_local_mcp_multi_user.py)
+  for the acceptance tests. In this mode the MCP client selects `user` on
+  every call, so (unlike the panel/broker) this is not an authorization
+  boundary between family members — it is trusted-local to whoever can reach
+  the process, the same trust level as a shared Hermes profile. File
+  permissions on `--users-root`/`--panel-db` are the real boundary.
 
 Out (single owner only, **fail closed** for non-bootstrap users with a clear message):
 
-- Hermes chat and agent features, Telegram, scheduled collectors (Hevy, Google Health), the stdio MCP server, the macOS desktop adapter.
-- Per-user timezone, medication and nutrition profile (`HERMES_*` settings stay installation-wide).
-- Admin web UI.
+- Hermes chat and agent features, Telegram, scheduled collectors (Hevy, Google Health), the macOS desktop adapter.
+- Per-user timezone (including for the stdio MCP's `--users-root` mode, which
+  keeps one `--timezone` for every served user) — `HERMES_TIMEZONE` stays
+  installation-wide even where other `HERMES_*` settings now vary per user
+  (see `deploy/bridge_commands.py`'s `PROFILE_KEYS`).
 
 ## Phase 2
 
@@ -71,6 +86,40 @@ nothing is shared with any other user's data. The existing single-user
 install becomes the bootstrap `owner` automatically (on first legacy-row
 migration, or lazily on first `flask enroll-token` with no `--user`); it keeps
 its original `HEALTH_DB`/`VAULT_DIR` unchanged.
+
+### Admin UI
+
+`/admin` (admin role only) lets an admin add and manage family members from
+the browser — no CLI or assistant required: a users table (role, status,
+created, whether a custom profile is set), a create-user form, a one-time
+"Generate enrollment link" button per user, enable/disable, role change, and
+the per-user profile settings below. Guards enforced server-side (not just in
+the UI): `owner` is never creatable, disable-able, or role-changeable; an
+admin can never disable or demote themselves; the last active admin can never
+be disabled or demoted.
+
+Every mutation still crosses the broker exactly like every other panel write
+— the admin page never opens a user's directory itself (the panel container
+mounts the data volume read-only). Three admin-only broker subcommands back
+it, declared in `deploy/bridge_commands.py` next to the existing allowlist:
+
+| Subcommand | Does |
+|---|---|
+| `user-provision` | Creates `<BRIDGE_USERS_ROOT>/<id>/` (mode 0700) and initializes `health.db`/`vault` with the same code `scripts/init_hermes.py` uses. Idempotent (an already-initialized user is success, never overwritten). |
+| `user-profile-write` | Validates and atomically writes that user's `profile.json` (stdin carries the JSON; whitelist is `deploy/bridge_commands.py`'s `PROFILE_KEYS`, the same one `flask user-profile` and the broker's own child-env overlay use). |
+| `user-profile-clear` | Removes `profile.json` ("reset to defaults"). |
+
+All three run in the broker process itself (never health.py or hermesctl —
+there is no `HEALTH_DB` to point at before a user exists), refuse the `owner`
+id and anything outside `BRIDGE_USERS_ROOT`, and refuse outright when
+`BRIDGE_USERS_ROOT` is unset (single-user mode). `user-provision` imports
+`scripts.init_hermes.init_health_database` directly, so it needs the full
+application tree next to the broker — true for the Docker image
+([docs/DOCKER.md](DOCKER.md), one shared image for panel/broker/admin) but
+**not** for the minimal systemd install (`deploy/install-bridge.sh` copies
+only `hermes-bridge`, `bridge_commands.py` and `hermesctl`); on that install
+`user-provision` fails closed with a clear error instead of a crash, and
+account creation falls back to `flask user-create` on the panel host.
 
 ### Panel configuration
 

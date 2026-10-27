@@ -4,7 +4,16 @@ The source-tree panel imports this module as deploy.bridge_commands. The broker
 imports the adjacent installed copy, which must stay root-owned and read-only
 alongside its executable. This module contains declarations only: the broker
 owns privileged validation, profiles, execution limits and audit handling.
+
+It also owns the per-user profile.json whitelist and its validation (see
+docs/MULTI_USER.md "Per-user profile settings") — the ONE place both the
+broker's child-env overlay and the panel's read-only display helper
+(app.users.current_profile) resolve the same keys the same way.
 """
+import errno
+import json
+import os
+import stat
 
 # Positional values and command semantics remain validated by health.py or
 # hermesctl. Commands intentionally absent here remain unavailable to the panel.
@@ -108,7 +117,22 @@ COMMAND_FLAGS = {
     "hermes-model-set": set(),
     "fitbit-status":    set(),
     "hermes-chat":      {"--session"},   # message on stdin; fixed session validated by hermesctl
+    # Admin panel user lifecycle (docs/MULTI_USER.md "Admin UI"): one
+    # positional target user id, zero flags. These never exec health.py or
+    # hermesctl — the broker handles them in-process (see ADMIN_COMMANDS and
+    # deploy/hermes-bridge's _run_admin_command) because they create/manage a
+    # user's OWN directory tree, which the HEALTH_DB/HEALTH_VAULT env-var
+    # model has no way to express before that user exists.
+    "user-provision":      set(),
+    "user-profile-write":  set(),   # profile JSON arrives on stdin
+    "user-profile-clear":  set(),
 }
+
+# Admin-only commands executed directly by the broker process (no health.py /
+# hermesctl subprocess). Every one operates on a target user id — never the
+# caller's own — validated against USER_ID_RE and refused for the bootstrap
+# owner. See deploy/hermes-bridge's _validate_admin_command/_run_admin_command.
+ADMIN_COMMANDS = frozenset({"user-provision", "user-profile-write", "user-profile-clear"})
 
 # Preserve the existing client-side flag-check subset. The broker checks flags
 # for every command; extending client checks is a separate behavior change.
@@ -128,3 +152,113 @@ NO_VALUE_FLAGS = {"--all", "--include-provenance"}
 # budget includes 25% headroom, rounded up to 30s. Write and external-Hermes
 # limits stay independent; the panel waits ten seconds longer for a response.
 OUTCOME_ANALYSIS_TIMEOUT = 570
+
+
+# ── per-user profile.json (docs/MULTI_USER.md "Per-user profile settings") ──
+# The bootstrap owner keeps reading these straight off the installation
+# process environment, exactly as a single-user install always has.
+# HERMES_TIMEZONE is deliberately absent: it is bound at panel import time,
+# so a per-user value would mix civil dates within one process and corrupt
+# day-boundary writes — it stays installation-wide.
+PROFILE_KEYS = frozenset({
+    "HERMES_NUTRIENT_TARGETS_JSON",
+    "HERMES_PHASE_OFFSETS_JSON",
+    "HERMES_PROTEIN_PER_KG_JSON",
+    "HERMES_WATER_FALLBACK_ML",
+    "HERMES_WATER_ML_PER_KG",
+    "HERMES_WATER_ML_PER_EXERCISE_HOUR",
+    "HERMES_WATER_HOT_DAY_BONUS_ML",
+    "HERMES_WATER_HOT_DAY_TEMP_C",
+    "HERMES_SIT_REACH_NORMAL_CM",
+    "HERMES_PRIMARY_MEDICATION",
+    "HERMES_MEDICATION_ALIASES",
+})
+
+# Keys whose profile.json value is a JSON object/array (serialized with
+# json.dumps into the child's env string); every other whitelisted key is a
+# plain string/number, stringified as-is.
+PROFILE_JSON_KEYS = frozenset({
+    "HERMES_NUTRIENT_TARGETS_JSON",
+    "HERMES_PHASE_OFFSETS_JSON",
+    "HERMES_PROTEIN_PER_KG_JSON",
+})
+
+PROFILE_MAX_BYTES = 16 * 1024
+
+
+class ProfileError(ValueError):
+    """A profile.json object fails the whitelist — message is safe to audit."""
+
+
+def validate_profile(data) -> None:
+    """Raise ProfileError on the first violation; otherwise do nothing.
+    `data` is an already-parsed JSON value (not yet known to be an object)."""
+    if not isinstance(data, dict):
+        raise ProfileError("profile.json must be a JSON object")
+    for key, value in data.items():
+        if key not in PROFILE_KEYS:
+            raise ProfileError(f"profile key not allowed: {key}")
+        if key in PROFILE_JSON_KEYS:
+            if not isinstance(value, (dict, list)):
+                raise ProfileError(f"profile key {key} must be a JSON object or array")
+        elif isinstance(value, bool) or not isinstance(value, (str, int, float)):
+            raise ProfileError(f"profile key {key} must be a string or number")
+
+
+def profile_env_overlay(data) -> dict:
+    """A validated profile.json object -> the child-process env overlay
+    (every value a str; *_JSON keys re-serialized with json.dumps). Raises
+    ProfileError if `data` fails validate_profile."""
+    validate_profile(data)
+    return {
+        key: (json.dumps(value) if key in PROFILE_JSON_KEYS else str(value))
+        for key, value in data.items()
+    }
+
+
+def read_profile_file(path):
+    """Read and JSON-parse `path`. Returns ({}, None) when the file is
+    simply absent (no per-user overrides — not a refusal). Returns
+    (data, None) with the parsed value otherwise (not yet whitelist-checked).
+    Returns (None, error) for anything that must fail closed: a symlink
+    (checked via O_NOFOLLOW, race-free), a non-regular file, a file over
+    PROFILE_MAX_BYTES, or content that isn't valid UTF-8 JSON."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return {}, None
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            return None, "profile.json must not be a symlink"
+        return None, f"profile.json unreadable: {exc.strerror or exc}"
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            return None, "profile.json must be a regular file"
+        if st.st_size > PROFILE_MAX_BYTES:
+            return None, "profile.json exceeds the 16 KiB limit"
+        raw = os.read(fd, PROFILE_MAX_BYTES + 1)
+    finally:
+        os.close(fd)
+    if len(raw) > PROFILE_MAX_BYTES:
+        return None, "profile.json exceeds the 16 KiB limit"
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return None, "profile.json is not valid JSON"
+    return data, None
+
+
+def load_profile(path):
+    """read_profile_file + whitelist validation in one call. Returns
+    (overlay, None) — overlay is {} for an absent file (installation
+    defaults) — or (None, error) for a present-but-invalid file. Never a
+    silent partial overlay: either every key in `data` is valid, or none of
+    it is used."""
+    data, err = read_profile_file(path)
+    if err is not None:
+        return None, err
+    try:
+        return profile_env_overlay(data), None
+    except ProfileError as exc:
+        return None, str(exc)

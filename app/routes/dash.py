@@ -7,20 +7,19 @@ per day, so every row carries `source` and filtering happens client-side.
 """
 import statistics
 
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, jsonify, request
 
-from app import bridge, canon, db_read
+from app import bridge, canon, db_read, users
 
 bp = Blueprint("dash", __name__, url_prefix="/api/dash")
 
 def _medication_names():
-    """Return installation-owned medication labels for the dose chart."""
-    primary = str(current_app.config.get(
-        "HERMES_PRIMARY_MEDICATION", "medication"
-    )).strip().lower()
-    aliases = str(current_app.config.get(
-        "HERMES_MEDICATION_ALIASES", ""
-    )).split(",")
+    """Return the current user's medication labels for the dose chart (their
+    own profile.json override, else installation config — see
+    app.users.medication_settings)."""
+    primary_raw, aliases_raw = users.medication_settings()
+    primary = str(primary_raw).strip().lower()
+    aliases = str(aliases_raw).split(",")
     names = {primary or "medication"}
     names.update(value.strip().lower() for value in aliases if value.strip())
     return tuple(sorted(names))
@@ -725,10 +724,9 @@ def safety():
         f" WHERE LOWER(drug) IN ({ph}){dwhere}"
         " GROUP BY date ORDER BY date", dparams,
     )
+    primary, _aliases = users.medication_settings()
     return jsonify(
-        medication=current_app.config.get(
-            "HERMES_PRIMARY_MEDICATION", "medication"
-        ),
+        medication=primary,
         vitals=vitals,
         doses=doses,
     )

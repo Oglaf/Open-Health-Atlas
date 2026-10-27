@@ -65,7 +65,8 @@ def main(argv):
         return 0
     if cmd == "flask":
         os.execvp("flask", ["flask", *rest])
-    if cmd in {"user-create", "user-list", "user-disable", "user-enable", "enroll-token"}:
+    if cmd in {"user-create", "user-list", "user-disable", "user-enable",
+               "user-profile", "enroll-token"}:
         os.execvp("flask", ["flask", cmd, *rest])
     print(f"unknown command: {cmd}", file=sys.stderr)
     return 2

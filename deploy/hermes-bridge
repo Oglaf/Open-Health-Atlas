@@ -24,6 +24,7 @@ allowlist and can never be driven from the panel.
 import hashlib
 import json
 import os
+from pathlib import Path
 import pwd
 import re
 from datetime import date
@@ -33,10 +34,23 @@ import socketserver
 import struct
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
-from bridge_commands import COMMAND_FLAGS, NO_VALUE_FLAGS, OUTCOME_ANALYSIS_TIMEOUT
+from bridge_commands import (
+    ADMIN_COMMANDS, COMMAND_FLAGS, NO_VALUE_FLAGS, OUTCOME_ANALYSIS_TIMEOUT,
+    PROFILE_MAX_BYTES, ProfileError, load_profile, validate_profile,
+)
+
+# In a full-repo deployment (Docker; see deploy/docker/oha) this file lives at
+# <repo-root>/deploy/hermes-bridge, so its parent's parent is the repo root
+# where scripts/, app/ and toolkit/ live — needed only to provision a new
+# user's health.db (see _provision_user, which imports scripts.init_hermes
+# lazily). A minimal systemd install (deploy/install-bridge.sh) copies only
+# this file, bridge_commands.py and hermesctl, so that import fails there;
+# _provision_user turns that into a clear refusal instead of a crash.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
 
 HEALTH = os.environ.get("BRIDGE_HEALTH", "/opt/hermes/toolkit/health.py")
 HERMESCTL = os.environ.get("BRIDGE_HERMESCTL", "/usr/local/lib/hermes-bridge/hermesctl")
@@ -237,16 +251,17 @@ def _phase5_values(subcmd, args):
     return None
 
 
-def _resolve_user_env(user):
-    """Child-process env overlay for `user`'s health.db/vault, or None to
-    refuse the request. `{}` means "use the broker's own configured
-    HEALTH_DB/HEALTH_VAULT unchanged" (the legacy owner, or any request at
-    all when multi-user mode is off) — never a per-user override."""
-    if not BRIDGE_USERS_ROOT:
-        return {} if user is None or user == BRIDGE_OWNER_USER else None
-    if user == BRIDGE_OWNER_USER:
-        return {}
-    if user is None or not USER_ID_RE.fullmatch(user):
+class _ProfileRefused(Exception):
+    """A non-owner user's profile.json exists but fails the whitelist/shape
+    checks. Distinct from "unknown or invalid user" so the audit record
+    names the actual reason instead of looking like a typo'd user id."""
+
+
+def _user_dir(user):
+    """Realpath'd, containment-checked directory for a non-owner `user` id,
+    or None if the id is malformed, the resolved path escapes
+    BRIDGE_USERS_ROOT (traversal or a symlink), or it doesn't exist."""
+    if not USER_ID_RE.fullmatch(user or ""):
         return None
     root = os.path.realpath(BRIDGE_USERS_ROOT)
     user_dir = os.path.realpath(os.path.join(root, user))
@@ -254,10 +269,162 @@ def _resolve_user_env(user):
         return None  # traversal, or a symlink escaping the configured root
     if not os.path.isdir(user_dir):
         return None  # unknown user: never silently create a database for it
-    return {
+    return user_dir
+
+
+def _resolve_user_env(user):
+    """Child-process env overlay for `user`'s health.db/vault (+ their own
+    validated profile.json, non-owner only), or None to refuse the request.
+    `{}` means "use the broker's own configured HEALTH_DB/HEALTH_VAULT
+    unchanged" (the legacy owner, or any request at all when multi-user mode
+    is off) — never a per-user override. Raises _ProfileRefused instead of
+    returning None when the user/db/vault resolve fine but profile.json
+    itself is the problem, so callers can audit the specific reason."""
+    if not BRIDGE_USERS_ROOT:
+        return {} if user is None or user == BRIDGE_OWNER_USER else None
+    if user == BRIDGE_OWNER_USER:
+        return {}
+    if user is None:
+        return None
+    user_dir = _user_dir(user)
+    if user_dir is None:
+        return None
+    overlay = {
         "HEALTH_DB": os.path.join(user_dir, "health.db"),
         "HEALTH_VAULT": os.path.join(user_dir, "vault"),
     }
+    profile_overlay, err = load_profile(os.path.join(user_dir, "profile.json"))
+    if err is not None:
+        raise _ProfileRefused(f"invalid profile for user {user!r}: {err}")
+    overlay.update(profile_overlay)
+    return overlay
+
+
+def _admin_user_dir(target):
+    """Realpath'd, containment-checked directory for `target` under
+    BRIDGE_USERS_ROOT, regardless of whether it exists yet — unlike
+    `_user_dir`, which refuses an unknown user, `user-provision`'s whole job
+    is to create one. Callers that require an EXISTING user (profile write/
+    clear) check os.path.isdir themselves. None on traversal/symlink escape."""
+    root = os.path.realpath(BRIDGE_USERS_ROOT)
+    user_dir = os.path.realpath(os.path.join(root, target))
+    if user_dir == root or os.path.commonpath([root, user_dir]) != root:
+        return None
+    return user_dir
+
+
+def _validate_admin_command(subcmd, args):
+    """Defense-in-depth for the admin panel's three user-lifecycle commands.
+    Actor authorization (is the caller an active admin?) is the PANEL's job —
+    this broker has no access to panel.db and never re-derives it; this
+    function only enforces path/id safety for the TARGET id, exactly like
+    every other bridge command's flag validation does for its own arguments."""
+    if not BRIDGE_USERS_ROOT:
+        return "multi-user mode is not enabled (BRIDGE_USERS_ROOT is unset)"
+    if len(args) != 1 or not USER_ID_RE.fullmatch(args[0]):
+        return "invalid target user id"
+    if args[0] == BRIDGE_OWNER_USER:
+        return f"the bootstrap owner cannot be administered via {subcmd}"
+    if _admin_user_dir(args[0]) is None:
+        return "target id escapes the configured users root"
+    return None
+
+
+def _validate_profile_stdin(stdin):
+    if not isinstance(stdin, str):
+        return "profile write requires stdin JSON"
+    if len(stdin.encode("utf-8")) > PROFILE_MAX_BYTES:
+        return "profile.json exceeds the 16 KiB limit"
+    try:
+        data = json.loads(stdin)
+    except ValueError:
+        return "invalid profile JSON"
+    try:
+        validate_profile(data)
+    except ProfileError as exc:
+        return str(exc)
+    return None
+
+
+def _provision_user(target):
+    """Idempotently create <target>'s own directory + health.db + vault,
+    using the exact same initialisation code as `flask user-create` and
+    scripts/init_hermes.py (init_health_database) — never copied, imported.
+    An already-initialized health.db is success, not an overwrite."""
+    user_dir = _admin_user_dir(target)
+    if user_dir is None:
+        return 2, "", "target id escapes the configured users root"
+    health_db = os.path.join(user_dir, "health.db")
+    if os.path.isfile(health_db):
+        return 0, json.dumps({"ok": True, "user_dir": user_dir, "already_initialized": True}), ""
+    try:
+        os.makedirs(user_dir, mode=0o700, exist_ok=True)
+        os.chmod(user_dir, 0o700)
+    except OSError as exc:
+        return 1, "", f"could not create user directory: {exc}"
+    sys.path.insert(0, str(_REPO_ROOT))
+    try:
+        from scripts.init_hermes import init_health_database
+    except ImportError as exc:
+        return 1, "", f"user provisioning is unavailable on this broker install: {exc}"
+    try:
+        result = init_health_database(Path(health_db), Path(user_dir) / "vault")
+    except FileExistsError:
+        return 0, json.dumps({"ok": True, "user_dir": user_dir, "already_initialized": True}), ""
+    except Exception as exc:
+        return 1, "", f"failed to initialize user: {exc}"
+    return 0, json.dumps({
+        "ok": True, "user_dir": user_dir, "already_initialized": False,
+        "health_db": result["health_db"], "vault_dir": result["vault_dir"],
+    }), ""
+
+
+def _profile_write(target, stdin):
+    user_dir = _admin_user_dir(target)
+    if user_dir is None or not os.path.isdir(user_dir):
+        return 2, "", "unknown target user"
+    try:
+        data = json.loads(stdin)
+        validate_profile(data)
+    except (ValueError, ProfileError) as exc:
+        return 2, "", f"invalid profile: {exc}"
+    payload = (json.dumps(data, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    profile_path = os.path.join(user_dir, "profile.json")
+    fd, tmp_name = tempfile.mkstemp(dir=user_dir, prefix=".profile.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(payload)
+        os.chmod(tmp_name, 0o600)
+        os.replace(tmp_name, profile_path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+    return 0, json.dumps({"ok": True}), ""
+
+
+def _profile_clear(target):
+    user_dir = _admin_user_dir(target)
+    if user_dir is None or not os.path.isdir(user_dir):
+        return 2, "", "unknown target user"
+    try:
+        os.unlink(os.path.join(user_dir, "profile.json"))
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        return 1, "", f"could not remove profile: {exc}"
+    return 0, json.dumps({"ok": True}), ""
+
+
+def _run_admin_command(subcmd, args, stdin):
+    target = args[0]
+    if subcmd == "user-provision":
+        return _provision_user(target)
+    if subcmd == "user-profile-write":
+        return _profile_write(target, stdin)
+    return _profile_clear(target)
 
 
 def _validate(subcmd, args):
@@ -265,6 +432,8 @@ def _validate(subcmd, args):
         return f"subcommand not allowed via the bridge: {subcmd}"
     if len(args) > MAX_ARGS:
         return "too many arguments"
+    if subcmd in ADMIN_COMMANDS:
+        return _validate_admin_command(subcmd, args)
     if subcmd == "analysis-job-start":
         return None if not args else "analysis job start accepts only request JSON"
     if subcmd == "analysis-job-status":
@@ -410,11 +579,22 @@ def handle(subcmd, args, peer_uid, stdin=None, user=None):
         err = _analysis_request(stdin)
     if err is None and subcmd == "analysis-job-status" and stdin is not None:
         err = "analysis job status accepts no stdin"
+    if err is None and subcmd == "user-profile-write":
+        err = _validate_profile_stdin(stdin)
+    if err is None and subcmd in {"user-provision", "user-profile-clear"} and stdin is not None:
+        err = f"{subcmd} accepts no stdin"
+    # ADMIN_COMMANDS run in-process on a TARGET user's directory, never the
+    # calling (`user`) identity's own — _resolve_user_env would be answering
+    # the wrong question here, so it is skipped entirely for these subcmds.
     env_overlay = None
-    if err is None:
-        env_overlay = _resolve_user_env(user)
-        if env_overlay is None:
-            err = f"unknown or invalid user: {user!r}"
+    if err is None and subcmd not in ADMIN_COMMANDS:
+        try:
+            env_overlay = _resolve_user_env(user)
+        except _ProfileRefused as exc:
+            err = str(exc)
+        else:
+            if env_overlay is None:
+                err = f"unknown or invalid user: {user!r}"
     if err is not None:
         # Refusals are audited too (ARCHITECTURE.md: "every call, including refused").
         try:
@@ -441,19 +621,23 @@ def handle(subcmd, args, peer_uid, stdin=None, user=None):
         return {"ok": False, "code": 3, "stdout": "",
                 "stderr": f"audit unavailable, refusing to run: {exc}"}
 
-    if subcmd in HERMESCTL_CMDS:
-        exec_argv = [sys.executable, HERMESCTL, HERMESCTL_CMDS[subcmd], *args]
+    if subcmd in ADMIN_COMMANDS:
+        # In-process: no health.py/hermesctl subprocess, no env_overlay.
+        code, stdout, stderr = _run_admin_command(subcmd, args, stdin)
     else:
-        exec_argv = [sys.executable, HEALTH, *argv]
-    tmo = TIMEOUTS.get(subcmd, TIMEOUT)
-    child_env = {**os.environ, **env_overlay} if env_overlay else None
-    try:
-        p = subprocess.run(exec_argv, input=stdin, env=child_env,
-                           capture_output=True, text=True, timeout=tmo)
-        code, stdout, stderr = p.returncode, p.stdout, p.stderr
-    except subprocess.TimeoutExpired:
-        # We own this child (same uid) so the kill in subprocess.run succeeds.
-        code, stdout, stderr = 124, "", f"command timed out after {tmo}s"
+        if subcmd in HERMESCTL_CMDS:
+            exec_argv = [sys.executable, HERMESCTL, HERMESCTL_CMDS[subcmd], *args]
+        else:
+            exec_argv = [sys.executable, HEALTH, *argv]
+        tmo = TIMEOUTS.get(subcmd, TIMEOUT)
+        child_env = {**os.environ, **env_overlay} if env_overlay else None
+        try:
+            p = subprocess.run(exec_argv, input=stdin, env=child_env,
+                               capture_output=True, text=True, timeout=tmo)
+            code, stdout, stderr = p.returncode, p.stdout, p.stderr
+        except subprocess.TimeoutExpired:
+            # We own this child (same uid) so the kill in subprocess.run succeeds.
+            code, stdout, stderr = 124, "", f"command timed out after {tmo}s"
     if subcmd == "analysis-job-start" and code == 0:
         _JOB_WAKE.set()
     if subcmd == "analysis-job-status" and code == 0 and BRIDGE_PROFILE == "dashboard-green-days-readonly":
@@ -537,12 +721,18 @@ class Server(socketserver.ThreadingUnixStreamServer):
         os.chmod(SOCK, 0o660)
 
 
+_PROFILE_REFUSAL_AUDITED = set()   # usernames already audited this process lifetime
+
+
 def _worker_targets():
     """env overlays the background worker drains per tick: this process's
     own env unchanged (the legacy owner, or the only target in single-user
-    mode) plus every configured user directory — so a non-owner's analysis
-    jobs (queued, per request, under their own health.db) are not silently
-    stuck forever on a worker that only ever polled the owner's database."""
+    mode) plus every configured user directory (+ that user's own validated
+    profile.json) — so a non-owner's analysis jobs (queued, per request,
+    under their own health.db) are not silently stuck forever on a worker
+    that only ever polled the owner's database. A user whose profile.json is
+    invalid is skipped (never run with a wrong/partial env) and audited once
+    per process lifetime, not every tick."""
     targets = [{}]
     if BRIDGE_USERS_ROOT and os.path.isdir(BRIDGE_USERS_ROOT):
         try:
@@ -552,12 +742,26 @@ def _worker_targets():
         for name in names:
             if name == BRIDGE_OWNER_USER or not USER_ID_RE.fullmatch(name):
                 continue
-            health_db = os.path.join(BRIDGE_USERS_ROOT, name, "health.db")
-            if os.path.isfile(health_db):
-                targets.append({
-                    "HEALTH_DB": health_db,
-                    "HEALTH_VAULT": os.path.join(BRIDGE_USERS_ROOT, name, "vault"),
-                })
+            user_dir = os.path.join(BRIDGE_USERS_ROOT, name)
+            health_db = os.path.join(user_dir, "health.db")
+            if not os.path.isfile(health_db):
+                continue
+            overlay = {
+                "HEALTH_DB": health_db,
+                "HEALTH_VAULT": os.path.join(user_dir, "vault"),
+            }
+            profile_overlay, err = load_profile(os.path.join(user_dir, "profile.json"))
+            if err is not None:
+                if name not in _PROFILE_REFUSAL_AUDITED:
+                    _PROFILE_REFUSAL_AUDITED.add(name)
+                    try:
+                        _audit({"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "user": name,
+                                "phase": "worker-profile-refused", "error": err})
+                    except OSError:
+                        pass
+                continue
+            overlay.update(profile_overlay)
+            targets.append(overlay)
     return targets
 
 

@@ -13,6 +13,7 @@ from flask import current_app, g, has_request_context
 
 from app import auth
 from app.panel_db import BOOTSTRAP_USER_ID, get_db
+from deploy.bridge_commands import load_profile
 
 USER_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 ROLES = ("admin", "member")
@@ -60,17 +61,30 @@ def all_users():
     return get_db().execute("SELECT * FROM users ORDER BY created_at").fetchall()
 
 
-def create_user(user_id, display_name, role="member"):
+def create_user(user_id, display_name, role="member") -> bool:
+    """Insert the panel `users` row. Returns True if a new row was inserted,
+    False if `user_id` already existed — idempotent on purpose, so the admin
+    panel's create-user flow (broker directory first, this row second) can
+    retry safely after a panel-side failure without erroring on the retry."""
     validate_user_id(user_id)
     if role not in ROLES:
         raise ValueError(f"invalid role: {role!r}")
     db = get_db()
-    db.execute(
-        "INSERT INTO users(id, display_name, role, status, health_db, vault_dir,"
-        " created_at) VALUES(?,?,?,'active',NULL,NULL,?)",
+    cur = db.execute(
+        "INSERT OR IGNORE INTO users(id, display_name, role, status, health_db,"
+        " vault_dir, created_at) VALUES(?,?,?,'active',NULL,NULL,?)",
         (user_id, (display_name or user_id).strip()[:80] or user_id, role,
          int(time.time())),
     )
+    db.commit()
+    return cur.rowcount > 0
+
+
+def set_role(user_id, role) -> None:
+    if role not in ROLES:
+        raise ValueError(f"invalid role: {role!r}")
+    db = get_db()
+    db.execute("UPDATE users SET role=? WHERE id=?", (role, user_id))
     db.commit()
 
 
@@ -83,6 +97,16 @@ def set_status(user_id, status):
         # Existing sessions must stop working immediately, not just at expiry.
         db.execute("UPDATE sessions SET revoked=1 WHERE user_id=?", (user_id,))
     db.commit()
+
+
+def active_admin_count() -> int:
+    """How many admin accounts are currently active — the admin panel's last-
+    admin guard (app/routes/admin.py) refuses a disable/demotion that would
+    bring this to zero, so there is always at least one admin left to recover
+    the install."""
+    return get_db().execute(
+        "SELECT COUNT(*) AS n FROM users WHERE role='admin' AND status='active'"
+    ).fetchone()["n"]
 
 
 def users_root(app=None) -> str:
@@ -133,6 +157,56 @@ def current_user():
 
 def is_owner(user_row) -> bool:
     return user_row is not None and user_row["id"] == BOOTSTRAP_USER_ID
+
+
+def user_profile_path(user_row, app=None) -> str:
+    """Path to a non-owner user's profile.json (docs/MULTI_USER.md "Per-user
+    profile settings"). The bootstrap owner has no profile file — it always
+    reads the installation env unchanged, same as a single-user install."""
+    app = app or current_app
+    return os.path.join(users_root(app), user_row["id"], "profile.json")
+
+
+def current_profile():
+    """Read-only effective per-user HERMES_* overlay for display (e.g. the
+    dashboard's medication grouping): {} for the owner, or when no user is
+    resolved (installation defaults apply) — otherwise the current user's
+    own profile.json, validated with the exact same whitelist the broker
+    uses (deploy.bridge_commands.load_profile), so the panel can never
+    display a key the broker would have refused to honor.
+
+    An absent file reads as {} (no overrides). A PRESENT but invalid file
+    also reads as {} here: this is a display-only read with no write to
+    refuse, unlike the broker's child-env overlay, which fails the whole
+    request closed instead (see deploy/hermes-bridge's _resolve_user_env).
+    Cached on g per request."""
+    if "current_profile_dict" in g:
+        return g.current_profile_dict
+    overlay = {}
+    user = current_user()
+    if user is not None and not is_owner(user):
+        loaded, _err = load_profile(user_profile_path(user))
+        if loaded is not None:
+            overlay = loaded
+    g.current_profile_dict = overlay
+    return overlay
+
+
+def medication_settings(app=None):
+    """(primary, aliases_csv) medication labels: the current user's own
+    profile.json values when they've set them (non-owner only), the
+    installation config otherwise — same precedence as current_profile()."""
+    app = app or current_app
+    profile = current_profile()
+    primary = profile.get(
+        "HERMES_PRIMARY_MEDICATION",
+        app.config.get("HERMES_PRIMARY_MEDICATION", "medication"),
+    )
+    aliases = profile.get(
+        "HERMES_MEDICATION_ALIASES",
+        app.config.get("HERMES_MEDICATION_ALIASES", ""),
+    )
+    return primary, aliases
 
 
 def current_vault_dir(app=None):

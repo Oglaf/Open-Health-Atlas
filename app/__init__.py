@@ -81,6 +81,7 @@ def create_app(overrides: dict | None = None) -> Flask:
     app.teardown_appcontext(close_db)
     db_read.init_app(app)
 
+    from app.routes.admin import bp as admin_bp
     from app.routes.auth import bp as auth_bp
     from app.routes.core import bp as core_bp
     from app.routes.dash import bp as dash_bp
@@ -97,6 +98,7 @@ def create_app(overrides: dict | None = None) -> Flask:
     from app.routes.recovery import bp as recovery_bp
 
     app.register_blueprint(core_bp)
+    app.register_blueprint(admin_bp)
     app.register_blueprint(auth_bp)
     app.register_blueprint(dash_bp)
     app.register_blueprint(log_bp)
@@ -138,8 +140,14 @@ def create_app(overrides: dict | None = None) -> Flask:
             if user is not None and not users.is_owner(user)
             else app.config["HERMES_DISPLAY_NAME"]
         )
+        # Appended, never spliced into NAV's own order (a user-visible UI
+        # contract) — admins see one extra entry at the end; members see
+        # nothing new.
+        nav = NAV if user is None or user["role"] != "admin" else [
+            *NAV, ("core.admin", "Admin", "admin"),
+        ]
         return {
-            "NAV": NAV,
+            "NAV": nav,
             "MOBILE_TABS": MOBILE_TABS,
             "logged_in": auth.current_session() is not None,
             "display_name": display_name,
@@ -233,5 +241,104 @@ def create_app(overrides: dict | None = None) -> Flask:
         users.set_status(user_id, "active")
         auth.audit("user.enable", user_id)
         click.echo(f"enabled '{user_id}'")
+
+    @app.cli.command("user-profile")
+    @click.argument("user_id")
+    @click.option("--set", "sets", multiple=True, metavar="KEY=VALUE",
+                  help="Set one profile key (repeatable). *_JSON keys take a JSON value.")
+    @click.option("--unset", "unsets", multiple=True, metavar="KEY",
+                  help="Remove one profile key (repeatable).")
+    @click.option("--show", is_flag=True, help="Print the effective profile as JSON.")
+    @click.option("--clear", is_flag=True, help="Delete profile.json entirely.")
+    def user_profile_cmd(user_id, sets, unsets, show, clear):
+        """Per-user HERMES_* overrides (nutrient targets, water, medication, ...).
+
+        The bootstrap owner has none — it always reads the installation env,
+        exactly as a single-user install always has (docs/MULTI_USER.md).
+        With no --set/--unset/--clear, this is the same as --show.
+        """
+        import json
+        import tempfile
+        from pathlib import Path
+
+        from app.panel_db import BOOTSTRAP_USER_ID
+        from deploy.bridge_commands import (
+            PROFILE_JSON_KEYS, PROFILE_KEYS, ProfileError, read_profile_file,
+            validate_profile,
+        )
+
+        if user_id == BOOTSTRAP_USER_ID:
+            raise click.ClickException(
+                f"'{BOOTSTRAP_USER_ID}' is the bootstrap owner — it has no profile.json"
+                " and always uses the installation env"
+            )
+        if users.get_user(user_id) is None:
+            raise click.ClickException(f"no such user: {user_id}")
+        if clear and (sets or unsets):
+            raise click.ClickException("--clear cannot be combined with --set/--unset")
+
+        user_dir = Path(users.users_root(app)) / user_id
+        profile_path = user_dir / "profile.json"
+
+        if clear:
+            if profile_path.exists():
+                profile_path.unlink()
+            click.echo(f"cleared profile for '{user_id}'")
+            return
+
+        data, err = read_profile_file(str(profile_path))
+        if err is not None:
+            raise click.ClickException(f"existing profile.json is invalid: {err}")
+
+        for key in unsets:
+            if key not in PROFILE_KEYS:
+                raise click.ClickException(f"not a profile key: {key}")
+            data.pop(key, None)
+
+        for item in sets:
+            if "=" not in item:
+                raise click.ClickException(f"--set expects KEY=VALUE: {item}")
+            key, raw_value = item.split("=", 1)
+            if key not in PROFILE_KEYS:
+                raise click.ClickException(f"not a profile key: {key}")
+            if key in PROFILE_JSON_KEYS:
+                try:
+                    value = json.loads(raw_value)
+                except ValueError:
+                    raise click.ClickException(
+                        f"--set {key} requires a JSON value, got: {raw_value!r}"
+                    )
+            else:
+                try:
+                    value = int(raw_value)
+                except ValueError:
+                    try:
+                        value = float(raw_value)
+                    except ValueError:
+                        value = raw_value
+            data[key] = value
+
+        try:
+            validate_profile(data)
+        except ProfileError as exc:
+            raise click.ClickException(str(exc))
+
+        if sets or unsets:
+            user_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+            payload = json.dumps(data, indent=2, sort_keys=True) + "\n"
+            fd, tmp_name = tempfile.mkstemp(dir=str(user_dir), prefix=".profile.", suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(payload)
+                os.chmod(tmp_name, 0o600)
+                os.replace(tmp_name, str(profile_path))
+            except BaseException:
+                os.unlink(tmp_name)
+                raise
+            auth.audit("user.profile_update", user_id)
+            click.echo(f"updated profile for '{user_id}': {sorted(data)}")
+
+        if show or not (sets or unsets):
+            click.echo(json.dumps(data, indent=2, sort_keys=True))
 
     return app

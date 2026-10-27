@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}Admin{% endblock %}
+{% block content %}
+{# Admin panel (docs/MULTI_USER.md "Admin UI"): lets an admin add and manage
+   family members from the web UI, with no CLI or assistant required. Every
+   write here crosses /api/admin/* -> the broker (app/bridge.py), exactly
+   like every other panel write; this page never talks to a user's directory
+   directly. Admin role only (app/routes/core.py gates the page itself). #}
+<div class="vstack">
+  <div class="row-top between wrap">
+    <div class="crumb">
+      <a class="back" href="{{ url_for('core.dashboard') }}">◱ Hub</a>
+      <h1 class="page-title">Admin</h1>
+      <span class="muted micro">add and manage family members</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3 class="card-title mb-2">Family members</h3>
+    <div class="table-wrap">
+      <table class="data-table" id="ad-users-table">
+        <thead>
+          <tr>
+            <th>Name</th><th>Id</th><th>Role</th><th>Status</th>
+            <th>Created</th><th>Profile</th><th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="ad-users-body">
+          <tr><td colspan="7" class="muted micro">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="field-hint" id="ad-users-status" role="status" aria-live="polite"></p>
+  </div>
+
+  <div class="card">
+    <h3 class="card-title mb-2">Add a family member</h3>
+    <form id="ad-create-form" novalidate>
+      <div class="field-row">
+        <label class="field">
+          <span>Id</span>
+          <input id="ad-new-id" type="text" placeholder="e.g. alex" maxlength="32"
+                 pattern="[a-z0-9][a-z0-9_-]{0,31}" autocomplete="off" required>
+        </label>
+        <label class="field">
+          <span>Display name</span>
+          <input id="ad-new-name" type="text" placeholder="e.g. Alex" maxlength="80" autocomplete="off">
+        </label>
+        <label class="field">
+          <span>Role</span>
+          <select id="ad-new-role" class="select">
+            <option value="member" selected>Member</option>
+            <option value="admin">Admin</option>
+          </select>
+        </label>
+      </div>
+      <p class="field-hint">Lowercase letters, digits, "-" or "_", starting with a letter or digit — up to 32 characters.</p>
+      <button id="ad-create-btn" class="save-btn" type="submit">Create</button>
+    </form>
+    <p class="field-hint" id="ad-create-status" role="status" aria-live="polite"></p>
+  </div>
+
+  <div class="card" id="ad-link-card" hidden>
+    <h3 class="card-title mb-2">Enrollment link</h3>
+    <p class="field-hint" id="ad-link-hint"></p>
+    <div class="add-ex">
+      <input id="ad-link-url" type="text" class="grow" readonly aria-label="Enrollment link">
+      <button id="ad-link-copy" class="save-btn" type="button">Copy</button>
+    </div>
+    <p class="field-hint">Shown once — it is not stored anywhere and will not be shown again. Valid 15 minutes, single use.</p>
+  </div>
+
+  <div class="card">
+    <h3 class="card-title mb-2">Per-user profile settings</h3>
+    <label class="field mb-2">
+      <span>Member</span>
+      <select id="ad-profile-user" class="select">
+        <option value="">Select a member…</option>
+      </select>
+    </label>
+    <div id="ad-profile-form" hidden>
+      <div class="field-row" id="ad-profile-fields"></div>
+      <div class="row gap-2">
+        <button id="ad-profile-save" class="save-btn" type="button">Save</button>
+        <button id="ad-profile-reset" class="btn quiet" type="button">Reset to defaults</button>
+      </div>
+      <p class="field-hint" id="ad-profile-status" role="status" aria-live="polite"></p>
+    </div>
+  </div>
+</div>
+
+<div class="toast-wrap" id="toast-wrap" aria-live="polite"></div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/admin.js') }}" defer></script>
+{% endblock %}

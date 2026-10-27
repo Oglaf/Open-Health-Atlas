@@ -81,6 +81,76 @@ guide verifies only the local server. The server itself makes no model calls,
 but your client may send returned records to its configured model provider.
 A local database is not a guarantee that the client processes results locally.
 
+## Multi-user mode
+
+A household or small group covered by one [multi-user install](MULTI_USER.md)
+can use one Hermes profile (one MCP entry) for everyone, instead of one
+profile per person. Start the same server with `--users-root` instead of
+`--database`; every tool call then names which person's data to use:
+
+```json
+{
+  "mcpServers": {
+    "openhealthatlas": {
+      "command": "/absolute/path/to/venv/bin/python",
+      "args": [
+        "-B",
+        "/absolute/path/to/Open-Health-Atlas/scripts/openhealthatlas_mcp.py",
+        "--users-root", "/opt/docker/medical-oha-data/users",
+        "--owner-database", "/opt/docker/medical-oha-data/health.db",
+        "--panel-db", "/opt/docker/medical-oha-state/panel.db",
+        "--timezone", "UTC"
+      ]
+    }
+  }
+}
+```
+
+`--database` and `--users-root` are mutually exclusive; pick exactly one.
+`--users-root` must contain one subdirectory per person, each holding that
+person's `health.db` (the same layout the panel and broker already use under
+`USERS_ROOT`/`BRIDGE_USERS_ROOT`; see [docs/MULTI_USER.md](MULTI_USER.md)).
+`--owner-database` is optional and maps the reserved id `owner` to the
+pre-existing single-user `health.db` that lives outside `--users-root`
+(the bootstrap identity from a single-user install); without it, `owner` is
+simply an unknown user. `--panel-db` is optional and points at the panel's
+own `panel.db`, opened strictly read-only (the same `mode=ro` + `query_only`
++ deny-all-but-`SELECT` posture `app/db_read.py` uses); when given, a name
+must have an `active` row in that database's `users` table — the owner
+included — or the request is refused exactly like an unknown user, and a
+`panel.db` that cannot be read refuses every name rather than allowing one.
+Without `--panel-db`, the only check is that the person's directory exists;
+a person disabled through the panel's admin tooling is not enforced at this
+layer, only at the panel/broker layer, until `--panel-db` is also configured.
+
+In multi-user mode, every tool call takes one additional required argument:
+
+```json
+{"user": "alex", "feature_keys": ["sleep.duration_hours"], "range": {"from": "2026-06-24", "to": "2026-06-30"}, "view": "summary"}
+```
+
+`user` is a lookup key, never a path: it must match `[a-z0-9][a-z0-9_-]{0,31}`,
+and the server resolves it itself against `--users-root`/`--owner-database`/
+`--panel-db`. The connected client cannot select or discover a database path
+through any argument. A missing, malformed, unknown or disabled `user`
+produces the same opaque refusal as any other failed request — it never
+reveals which check failed or any filesystem path. Each resolved database
+gets its own isolated per-user state (surface, background analysis tasks,
+task ids): a task id or evidence reference minted for one person is refused,
+not honored, under a different `user`. All users still share the single
+`--timezone` configured at startup; per-user timezone remains out of scope
+(see [docs/MULTI_USER.md](MULTI_USER.md) Phase 2).
+
+**This is not an authorization boundary between family members.** The MCP
+client — not a login, not a passkey — chooses `user` on every call, so access
+here is trusted to whoever can launch or talk to this process at all, the
+same way a shared Hermes profile is trusted to whoever has it configured.
+The real boundary is file permissions: `--users-root` and `--panel-db` must
+only be readable by the account running this MCP server, exactly as the
+panel/broker's own bind-mounts restrict access in [docs/MULTI_USER.md](MULTI_USER.md#systemd-bind-mount-implications).
+If a family member should not be able to read another member's records
+through this server, they must not share the account or process that runs it.
+
 ## First use
 
 After connecting, check that the client lists the tools below. Start with a
@@ -145,7 +215,10 @@ client checks `health_task_status` until it receives the completed result or
 an error. Status supports a bounded wait to avoid rapid polling. One heavy
 task runs at a time; repeated submissions of the same pending request reuse
 that task. A different heavy request receives a busy response and can be
-submitted again after the current task finishes.
+submitted again after the current task finishes. In multi-user mode this
+limit, and the task registry itself, are per `user`: one person's heavy
+analysis does not block another's, and a task id is only ever visible under
+the `user` it was started for.
 
 Task handles belong to the running MCP process. If the client restarts it,
 submit the request again. Exact analytical caches can still be reused when
@@ -160,15 +233,21 @@ still applies.
 
 ## Data and existing workflows
 
-The database is selected at startup. A tool request cannot switch databases,
-provide raw SQL, open an arbitrary file or write health records. The canonical
-health database is opened read-only. Private derived cache and lock files may
-be created beside it; they are not additional canonical health records.
+The database (or, in multi-user mode, the set of per-user databases under
+`--users-root`) is selected at startup. A tool request cannot switch
+databases, provide raw SQL, open an arbitrary file or write health records;
+in multi-user mode its only database-related choice is which already-resolved
+`user` to act as. The canonical health database is opened read-only. Private
+derived cache and lock files may be created beside it; they are not
+additional canonical health records.
 
 Each database has an opaque dataset identity. Evidence from another configured
 database, or from the separate fictional Hermes adapter, cannot be reused as
 if it belonged to this connection. Moving the database to another path changes
-that identity; ask for fresh evidence after moving it.
+that identity; ask for fresh evidence after moving it. In multi-user mode this
+also means evidence from one `user` cannot be replayed as another's: the
+dataset identity differs, so the server refuses the replay as stale rather
+than silently returning someone else's data.
 
 Existing panel, import, manual-entry, Hermes and Telegram paths continue to
 use their own entry points. The standalone MCP server does not install Hermes,
