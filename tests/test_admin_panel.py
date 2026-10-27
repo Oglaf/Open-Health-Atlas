@@ -261,7 +261,7 @@ def test_create_user_happy_path_and_refusals(admin_env):
     assert body["user"]["id"] == "alice" and body["user"]["role"] == "member"
     assert (users_root / "alice" / "health.db").is_file()
     assert (users_root / "alice" / "vault").is_dir()
-    assert oct(os.stat(users_root / "alice").st_mode)[-3:] == "700"
+    assert oct(os.stat(users_root / "alice").st_mode)[-3:] == "750"
     with app.app_context():
         row = users_mod.get_user("alice")
         assert row is not None and row["status"] == "active"

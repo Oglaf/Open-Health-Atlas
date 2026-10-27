@@ -151,6 +151,26 @@ panel/broker's own bind-mounts restrict access in [docs/MULTI_USER.md](MULTI_USE
 If a family member should not be able to read another member's records
 through this server, they must not share the account or process that runs it.
 
+### Granting the MCP read access (containerized deployment)
+
+In the container deployment the data directories are owned by the container
+uid (e.g. 1000) with mode 0700, so an MCP running as another host account
+sees nothing until the owner grants a read ACL. Run once, as the directory
+owner (no sudo needed), replacing `mcpuser` with the account that runs the MCP:
+
+```
+setfacl -m  u:mcpuser:--x  <data>  <state>              # traverse only
+setfacl -R -m u:mcpuser:rX  <data>/users                # read all users
+setfacl -d -m u:mcpuser:rX  <data>/users                # inherit for new users
+setfacl -m  u:mcpuser:r--  <state>/panel.db             # --panel-db (disabled-user check)
+```
+
+New user directories are created with mode 0750, not 0700, on purpose: the
+group bits are the POSIX-ACL *mask*, so 0700 would silently cancel the grant
+for every user created afterwards. `panel.db` holds passkey public keys,
+hashed session tokens and the audit log; granting it read access is what
+lets the MCP refuse disabled users.
+
 ## First use
 
 After connecting, check that the client lists the tools below. Start with a

@@ -358,8 +358,12 @@ def _provision_user(target):
     if os.path.isfile(health_db):
         return 0, json.dumps({"ok": True, "user_dir": user_dir, "already_initialized": True}), ""
     try:
-        os.makedirs(user_dir, mode=0o700, exist_ok=True)
-        os.chmod(user_dir, 0o700)
+        # 0750, not 0700: chmod's group bits are the POSIX-ACL *mask*, so 0700
+        # would silently nullify an operator-granted read ACL (the MCP reads
+        # users/ as another host uid). Non-owner/non-group stay fully locked
+        # out; the group is the broker's own private gid.
+        os.makedirs(user_dir, mode=0o750, exist_ok=True)
+        os.chmod(user_dir, 0o750)
     except OSError as exc:
         return 1, "", f"could not create user directory: {exc}"
     sys.path.insert(0, str(_REPO_ROOT))

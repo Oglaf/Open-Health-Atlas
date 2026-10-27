@@ -80,7 +80,7 @@ flask enroll-token --user <id>   # prints a 15-minute, single-use enrollment URL
 ```
 
 `<id>` must match `[a-z0-9][a-z0-9_-]{0,31}`. `user-create` makes
-`<USERS_ROOT>/<id>/` (mode 0700) and initializes `<id>/health.db` +
+`<USERS_ROOT>/<id>/` (mode 0750 — group bits are the POSIX-ACL mask, so 0700 would cancel an operator read grant for the MCP) and initializes `<id>/health.db` +
 `<id>/vault` exactly like `scripts/init_hermes.py` does for a fresh install —
 nothing is shared with any other user's data. The existing single-user
 install becomes the bootstrap `owner` automatically (on first legacy-row
@@ -105,7 +105,7 @@ it, declared in `deploy/bridge_commands.py` next to the existing allowlist:
 
 | Subcommand | Does |
 |---|---|
-| `user-provision` | Creates `<BRIDGE_USERS_ROOT>/<id>/` (mode 0700) and initializes `health.db`/`vault` with the same code `scripts/init_hermes.py` uses. Idempotent (an already-initialized user is success, never overwritten). |
+| `user-provision` | Creates `<BRIDGE_USERS_ROOT>/<id>/` (mode 0750, see MCP note in LOCAL_MCP.md) and initializes `health.db`/`vault` with the same code `scripts/init_hermes.py` uses. Idempotent (an already-initialized user is success, never overwritten). |
 | `user-profile-write` | Validates and atomically writes that user's `profile.json` (stdin carries the JSON; whitelist is `deploy/bridge_commands.py`'s `PROFILE_KEYS`, the same one `flask user-profile` and the broker's own child-env overlay use). |
 | `user-profile-clear` | Removes `profile.json` ("reset to defaults"). |
 
