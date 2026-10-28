@@ -186,6 +186,12 @@ multi-frequency BIA body-composition scan (`log-body-composition`) — e.g. an
 agent that read a photo of a device printout like a Relaxmedic body
 composition analysis report.
 
+The panel's own guarded Hevy CSV import (`import-hevy-upload`, the Body
+page's "Import Hevy CSV" button) is a separate, narrower exception reachable
+only from the panel itself — it is deliberately absent from `health_write`
+and every other collector-only Hevy command stays off this list too. See
+PRODUCT_AUTHORITY.md "Fork deployment: guarded Hevy CSV import on the panel".
+
 `log-body-composition` takes its whole report as one JSON document in
 `stdin` (as a string, up to 64 KiB — larger than the 4 KiB free-text cap used
 by `write-note`): `date` (required, `YYYY-MM-DD`), optional `tested_at`

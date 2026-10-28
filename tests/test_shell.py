@@ -53,6 +53,20 @@ def test_stub_pages_render(authed):
         assert r.status_code == 200, f"{path} did not render"
 
 
+def test_body_page_has_hevy_import_button(authed):
+    """§hevy-panel-import (fork owner decision 2026-10-28): "an import button
+    at the very top" of the Body page, next to the period dropdown."""
+    html = authed.get("/training").get_data(as_text=True)
+    assert 'id="hevy-import-btn"' in html
+    assert "Import Hevy CSV" in html
+    assert 'id="hevy-import-file"' in html
+    assert 'id="hevy-import-panel"' in html
+    # "at the very top" — the button sits in the header row, before the body
+    # content and before the period dropdown it was asked to sit next to.
+    assert (html.index('id="hevy-import-btn"') < html.index('data-dd="body"')
+            < html.index('class="body-overview"'))
+
+
 def test_program_page_removed_redirects_to_training(authed):
     """task-50 item 6 (owner C3, UI-only removal): the Program & schedule
     editor page is gone — /program now 302s to /training, the closest

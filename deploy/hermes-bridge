@@ -19,7 +19,10 @@ Auth (two independent checks):
   2. Every connection's SO_PEERCRED uid must equal the configured panel uid.
 
 Bulk/destructive commands (import-hevy, import-recipes, fetch-*) are NOT in the
-allowlist and can never be driven from the panel.
+allowlist and can never be driven from the panel, with one narrow guarded
+exception: import-hevy-upload (fork owner decision 2026-10-28,
+docs/PRODUCT_AUTHORITY.md) — stdin-only content, no filesystem path argument,
+fully validated before any row is deleted, --dry-run never writes.
 """
 import hashlib
 import json

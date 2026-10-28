@@ -98,6 +98,40 @@ diagnostic or clinical claim is attached to the stored bands/evaluations
 standalone MCP stays read-only in every mode where no broker is configured —
 same boundary as the existing broker-mediated ingest decision.
 
+## Fork deployment: guarded Hevy CSV import on the panel (this fork)
+
+Owner decision, 2026-10-28: Christian Silva, operator of this fork and owner
+of this fork's deployment, asked in his own words: "all hevy data is located
+in /training right? if it is we could add an import button at the very top."
+(/training is the page titled "Body"; Hevy strength data feeds its
+progression, radar and ratio cards.) This reverses, for ONE new and narrowly
+guarded command only, the earlier posture that bulk imports are
+collector/agent-only and the panel is read-only:
+
+- no schema change;
+- the panel stays read-only for every OTHER bulk import — the existing
+  collector-only `import-hevy`, `import-hevy-json`, `import-hevy-routines`,
+  `import-hevy-templates` and `import-hevy-body` commands stay OFF both
+  broker allowlists, unchanged (tests/test_bridge.py and
+  tests/test_local_mcp_write.py pin this);
+- the one new command, `import-hevy-upload`, takes the CSV on stdin only
+  (never a filesystem path), caps the upload well under the broker's 8 MiB
+  request limit, and validates the export BEFORE deleting any existing
+  `source='hevy'` row: the header must carry `start_time`, `exercise_title`,
+  `set_index` and one of `weight_kg`/`weight_lbs`; there must be at least one
+  data row (an empty export is refused, matching the CLI importer's existing
+  "empty export clears history" contract — refusing it here prevents an
+  accidental wipe); and every row's `start_time` must parse, or the whole
+  import is rejected naming the first unparseable value (a CSV that would
+  silently store a NULL date has caused a real past incident for the owner);
+- `--dry-run` performs the same validation and returns the same summary
+  (rows, distinct workouts, exercises, date range, existing row count) without
+  writing; a real run still replaces only `source='hevy'` rows in one
+  transaction, preserving hand-logged sets, and rolls back fully on any error;
+- the write crosses the existing broker socket and its append-only audit,
+  exactly like every other panel-triggered writer — the panel never opens
+  SQLite directly and the CSV is never written to disk.
+
 ## First accepted product journey
 
 The first accepted journey is restricted to the fictional

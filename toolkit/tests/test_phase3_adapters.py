@@ -1303,6 +1303,17 @@ def test_quarterly_zero_side_denominator_never_fabricates_gap():
     assert quarterly._ratio_side_gap_episodes(valid, seed) == []
 
 
+def test_quarterly_body_rank_matches_dashboard_source_order():
+    # The dashboard's one-row-per-date pick is manual > bia-scan > hevy; the
+    # engine adapter must agree so a BIA scan is never shadowed by a Hevy row.
+    rows = [{"id": i, "source": s} for i, s in
+            enumerate(("zzz-other", "hevy", "bia-scan", "fitbit", "manual"), start=1)]
+
+    ordered = [r["source"] for r in sorted(rows, key=quarterly._body_rank)]
+
+    assert ordered == ["manual", "fitbit", "bia-scan", "hevy", "zzz-other"]
+
+
 def test_quarterly_units_survive_strict_full_registry_frame():
     conn = db((ROOT / "SCHEMA.sql").read_text())
     conn.execute(

@@ -421,3 +421,15 @@ def test_import_recipes_stays_absent_and_set_batch_flags_pinned():
     assert "import-recipes" not in bridge.ALLOWED   # unchanged import posture
 
     assert COMMAND_FLAGS["set-batch"] == {"--grams"}
+
+
+def test_hevy_upload_is_the_one_guarded_bulk_import_exception():
+    """§hevy-panel-import (fork owner decision 2026-10-28,
+    docs/PRODUCT_AUTHORITY.md): import-hevy-upload is allowlisted with exactly
+    --dry-run, carrying its CSV on stdin only (no positional path argument).
+    Every other Hevy import command stays collector-only, unchanged."""
+    assert "import-hevy-upload" in bridge.ALLOWED
+    assert COMMAND_FLAGS["import-hevy-upload"] == {"--dry-run"}
+    for collector_only in ("import-hevy", "import-hevy-json", "import-hevy-routines",
+                           "import-hevy-templates", "import-hevy-body"):
+        assert collector_only not in bridge.ALLOWED

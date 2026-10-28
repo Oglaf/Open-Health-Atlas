@@ -98,6 +98,11 @@ def build_parser(handlers, *, json_errors, output, meal_types, restock_actions, 
     s.add_argument("job_id"); s.add_argument("attempt")
 
     s = add("import-hevy"); s.add_argument("csv")
+    # §hevy-panel-import (fork owner decision 2026-10-28, docs/PRODUCT_AUTHORITY.md):
+    # the one guarded bulk-import exception reachable from the panel — content
+    # on stdin only, never a filesystem path (see import-hevy above, which stays
+    # collector/agent-only and off both broker allowlists).
+    s = add("import-hevy-upload"); s.add_argument("--dry-run", action="store_true")
     s = add("import-hevy-json"); s.add_argument("json_file"); s.add_argument("--force", action="store_true")
     s = add("import-hevy-body"); s.add_argument("json_file")
     s = add("import-hevy-templates"); s.add_argument("json_file")
@@ -381,6 +386,11 @@ def run(context, *, argv, output, parse_number,
     """Dispatch the explicitly registered command handlers."""
     def hevy_csv(arguments):
         output(import_csv(context, arguments.csv, parse_number=parse_number))
+
+    def hevy_upload(arguments):
+        output(hevy.import_upload(
+            context, stdin=stdin, dry_run=arguments.dry_run, parse_number=parse_number,
+        ))
 
     def hevy_json(arguments):
         output(hevy.import_json(
@@ -873,6 +883,7 @@ def run(context, *, argv, output, parse_number,
         "nutrition-targets": nutrition_targets,
         "nutrition-coverage": nutrition_coverage,
         "import-hevy": hevy_csv,
+        "import-hevy-upload": hevy_upload,
         "import-hevy-json": hevy_json,
         "import-hevy-templates": hevy_templates,
         "import-hevy-routines": hevy_routines,

@@ -798,8 +798,93 @@
     note.hidden = false;
   }
 
+  /* ---------- §hevy-panel-import: guarded CSV import button ----------
+     Owner decision 2026-10-28 (docs/PRODUCT_AUTHORITY.md): the ONE exception
+     to "the panel stays read-only for bulk imports". Flow: pick a .csv ->
+     automatic dry run (POST .../hevy-import with dry_run=1, no write) -> show
+     the confirm panel with the parsed summary -> Confirm re-POSTs the SAME
+     file with dry_run=0, which replaces source='hevy' rows -> reload. Every
+     guard (required columns, at least one row, every date parses) lives in
+     health.py; this just shapes the upload + renders its summary/errors. */
+  function wireHevyImport() {
+    const btn = document.getElementById("hevy-import-btn");
+    const fileInput = document.getElementById("hevy-import-file");
+    const panel = document.getElementById("hevy-import-panel");
+    const summary = document.getElementById("hevy-import-summary");
+    const confirmBtn = document.getElementById("hevy-import-confirm");
+    const cancelBtn = document.getElementById("hevy-import-cancel");
+    const msg = document.getElementById("hevy-import-msg");
+    if (!btn || !fileInput || !panel) return;
+    const csrf = document.querySelector('meta[name="csrf-token"]').content;
+    let pendingFile = null;
+
+    function reset() {
+      pendingFile = null;
+      panel.hidden = true;
+      summary.textContent = "";
+      msg.textContent = "";
+      fileInput.value = "";
+    }
+
+    async function postCsv(file, dryRun) {
+      const form = new FormData();
+      form.append("file", file);
+      form.append("dry_run", dryRun ? "1" : "0");
+      const res = await fetch("/api/log/hevy-import", {
+        method: "POST", credentials: "same-origin",
+        headers: { "X-CSRFToken": csrf }, body: form,
+      });
+      let data = {};
+      try { data = await res.json(); } catch (_) { /* non-JSON error body */ }
+      if (!res.ok || data.ok === false) throw new Error(data.error || ("HTTP " + res.status));
+      return data.result;
+    }
+
+    btn.addEventListener("click", () => fileInput.click());
+
+    fileInput.addEventListener("change", async () => {
+      const file = fileInput.files[0];
+      if (!file) return;
+      pendingFile = file;
+      msg.textContent = "";
+      summary.textContent = "Checking…";
+      panel.hidden = false;
+      confirmBtn.disabled = true;
+      try {
+        const r = await postCsv(file, true);
+        summary.textContent = `${r.rows} rows · ${r.workouts} workouts · ${r.exercises} exercises `
+          + `· ${r.first_date} → ${r.last_date}. Will replace ${r.existing_hevy_rows} existing `
+          + `Hevy set${r.existing_hevy_rows === 1 ? "" : "s"}; your manually logged sets are kept.`;
+        confirmBtn.disabled = false;
+      } catch (e) {
+        summary.textContent = "";
+        msg.textContent = e.message;
+        confirmBtn.disabled = true;
+      }
+    });
+
+    confirmBtn.addEventListener("click", async () => {
+      if (!pendingFile) return;
+      msg.textContent = "Importing…";
+      confirmBtn.disabled = true;
+      try {
+        const r = await postCsv(pendingFile, false);
+        msg.textContent = `Imported ${r.rows} rows (${r.workouts} workouts, ${r.exercises} `
+          + `exercises, ${r.first_date} → ${r.last_date}).`;
+        pendingFile = null;
+        setTimeout(() => location.reload(), 900);
+      } catch (e) {
+        msg.textContent = e.message;
+        confirmBtn.disabled = false;
+      }
+    });
+
+    cancelBtn.addEventListener("click", reset);
+  }
+
   /* ---------- boot ---------- */
   async function boot() {
+    wireHevyImport();
     // independent of the exercises fetch below — start it first so the
     // figure's paint isn't serialized behind an unrelated round-trip
     loadMuscleMap();

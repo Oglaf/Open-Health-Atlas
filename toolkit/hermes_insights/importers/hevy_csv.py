@@ -11,7 +11,8 @@ MI_TO_KM = 1.609344
 def parse_date(value):
     """Return an ISO day for supported export dates, or None for unknown dates."""
     for format_string in (
-        "%b %d, %Y at %I:%M %p", "%d %b %Y, %H:%M", "%d %b %Y at %H:%M",
+        "%b %d, %Y at %I:%M %p", "%b %d, %Y, %I:%M %p",
+        "%d %b %Y, %H:%M", "%d %b %Y at %H:%M",
         "%Y-%m-%d %H:%M:%S", "%Y-%m-%d",
     ):
         try:
@@ -22,8 +23,12 @@ def parse_date(value):
     return None
 
 
-def replace_history(connection, path, *, parse_number):
+def replace_history(connection, source, *, parse_number):
     """Replace only Hevy rows without committing the caller's transaction.
+
+    `source` is a filesystem path, or an already-open text stream (e.g. an
+    `io.StringIO` over stdin-provided content) — the guarded upload command
+    never writes the CSV to disk, so it passes a stream directly.
 
     Empty exports clear Hevy history. Unrecognized optional values remain missing;
     invalid integer fields raise. The caller must roll back any failed import.
@@ -32,7 +37,9 @@ def replace_history(connection, path, *, parse_number):
     # through the panel (source='ui'/'chat-panel') must survive reimports.
     connection.execute("DELETE FROM hevy_sets WHERE source='hevy'")
     count = 0
-    with open(path, newline="") as handle:
+    opened = None if hasattr(source, "read") else open(source, newline="")
+    handle = opened if opened is not None else source
+    try:
         reader = csv.DictReader(handle)
         columns = reader.fieldnames or []
         weight_key = "weight_kg" if "weight_kg" in columns else (
@@ -64,4 +71,7 @@ def replace_history(connection, path, *, parse_number):
                  distance, parse_number(row.get("duration_seconds")), parse_number(row.get("rpe"))),
             )
             count += 1
+    finally:
+        if opened is not None:
+            opened.close()
     return {"ok": True, "imported_sets": count, "weight_source": weight_key, "converted_to": "kg/km"}

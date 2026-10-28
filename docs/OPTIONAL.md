@@ -39,6 +39,8 @@ The [Hevy API documentation](https://api.hevyapp.com/docs/) describes provider a
 
 **Finished when:** the selected database contains the expected workout with correct units, and repeating the import does not duplicate it.
 
+**One-off alternative (this fork):** if you don't want to set up the API collector, the Body page's "Import Hevy CSV" button accepts a manually exported Hevy CSV directly — no API key, no collector service. It previews the import (rows, workouts, date range) before you confirm, then replaces only the previously-synced Hevy rows through the panel's existing validated writer. See PRODUCT_AUTHORITY.md "Fork deployment: guarded Hevy CSV import on the panel".
+
 ### Copy to your setup agent
 
 ```text

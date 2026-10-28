@@ -72,11 +72,15 @@ def _body_rank(row):
         tier = 0
     elif source == "fitbit":
         tier = 1
-    elif source == "hevy":
+    elif source == "bia-scan":
+        # Same order as the dashboard's one-row-per-date pick: a BIA scan
+        # beats a Hevy-synced body row, never a manual entry.
         tier = 2
-    else:
+    elif source == "hevy":
         tier = 3
-    lexical = source if tier == 3 else ""
+    else:
+        tier = 4
+    lexical = source if tier == 4 else ""
     return tier, lexical, -(row.get("id") or 0)
 
 

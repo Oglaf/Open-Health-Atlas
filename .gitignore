@@ -22,3 +22,6 @@ dist/
 build/
 instance/
 graphify-out/
+
+# tokensave code-graph index (local, generated)
+.tokensave/

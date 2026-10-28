@@ -1,5 +1,6 @@
 """Phase 5: the daily-loop write endpoints. A recording stub replaces the bridge
 so we assert the exact health.py argv each endpoint produces + input validation."""
+import io
 import json
 
 import pytest
@@ -126,6 +127,81 @@ def test_body(client):
 def test_water(client):
     client.post("/api/log/water", json={"water_ml": 1500})
     assert client.calls[-1] == ("log", ["intake", "water_ml=1500.0"])
+
+
+HEVY_CSV_BYTES = (
+    b"start_time,exercise_title,set_index,weight_kg\n2026-07-01,Front Squat,1,60\n"
+)
+
+
+def test_hevy_import_forwards_csv_as_stdin(client):
+    """§hevy-panel-import: the route shapes no CSV fields itself — health.py's
+    import-hevy-upload owns every validation; the panel only carries the text."""
+    r = client.post("/api/log/hevy-import", data={
+        "file": (io.BytesIO(HEVY_CSV_BYTES), "hevy.csv"), "dry_run": "0",
+    }, content_type="multipart/form-data")
+    assert r.status_code == 200 and r.get_json()["ok"] is True
+    assert client.calls[-1] == ("import-hevy-upload", [])
+    assert client.stdins[-1] == HEVY_CSV_BYTES.decode("utf-8")
+
+
+def test_hevy_import_dry_run_passes_flag(client):
+    r = client.post("/api/log/hevy-import", data={
+        "file": (io.BytesIO(HEVY_CSV_BYTES), "hevy.csv"), "dry_run": "1",
+    }, content_type="multipart/form-data")
+    assert r.status_code == 200
+    assert client.calls[-1] == ("import-hevy-upload", ["--dry-run"])
+
+
+def test_hevy_import_accepts_bom(client):
+    r = client.post("/api/log/hevy-import", data={
+        "file": (io.BytesIO(b"\xef\xbb\xbf" + HEVY_CSV_BYTES), "hevy.csv"),
+    }, content_type="multipart/form-data")
+    assert r.status_code == 200
+    assert client.stdins[-1] == HEVY_CSV_BYTES.decode("utf-8")   # BOM stripped
+
+
+def test_hevy_import_rejects_missing_file(client):
+    r = client.post("/api/log/hevy-import", data={}, content_type="multipart/form-data")
+    assert r.status_code == 400
+    assert client.calls == []
+
+
+def test_hevy_import_rejects_empty_file(client):
+    r = client.post("/api/log/hevy-import", data={
+        "file": (io.BytesIO(b""), "hevy.csv"),
+    }, content_type="multipart/form-data")
+    assert r.status_code == 400
+    assert client.calls == []
+
+
+def test_hevy_import_rejects_oversize_file(client):
+    big = io.BytesIO(b"x" * (5 * 1024 * 1024 + 1))
+    r = client.post("/api/log/hevy-import", data={
+        "file": (big, "hevy.csv"),
+    }, content_type="multipart/form-data")
+    assert r.status_code == 400
+    assert client.calls == []
+
+
+def test_hevy_import_rejects_non_utf8_file(client):
+    r = client.post("/api/log/hevy-import", data={
+        "file": (io.BytesIO(b"start_time,exercise_title\n\xff\xfe,Squat\n"), "hevy.csv"),
+    }, content_type="multipart/form-data")
+    assert r.status_code == 400
+    assert client.calls == []
+
+
+def test_hevy_import_surfaces_bridge_errors(client, monkeypatch):
+    def refuse(subcmd, *args, **kw):
+        raise bridge.BridgeError("hevy CSV is missing required column(s): set_index")
+
+    monkeypatch.setattr(bridge, "run", refuse)
+    r = client.post("/api/log/hevy-import", data={
+        "file": (io.BytesIO(HEVY_CSV_BYTES), "hevy.csv"),
+    }, content_type="multipart/form-data")
+    assert r.status_code == 400
+    assert "set_index" in r.get_json()["error"]
 
 
 def test_body_composition_forwards_the_document_verbatim_as_stdin(client):

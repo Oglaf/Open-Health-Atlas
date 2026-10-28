@@ -1,5 +1,7 @@
 """Hevy import validation, transactions and quarterly observation coordination."""
 
+import csv
+import io
 from zoneinfo import ZoneInfo
 
 from .. import migrations, runtime, orchestrator
@@ -7,7 +9,7 @@ from ..catalogs import CATALOG
 from ..routine_history import require_history, snapshot
 from ..importers import hevy_json as payload
 from ..command_context import CommandContext
-from ..importers.hevy_csv import replace_history
+from ..importers.hevy_csv import parse_date, replace_history
 
 
 def import_csv(context: CommandContext, path, *, parse_number):
@@ -21,6 +23,91 @@ def import_csv(context: CommandContext, path, *, parse_number):
             migrations.require_table(connection, "hevy_sets", ("source",))
             result = replace_history(connection, path, parse_number=parse_number)
         return result
+    finally:
+        connection.close()
+
+
+# §hevy-panel-import (fork owner decision 2026-10-28, docs/PRODUCT_AUTHORITY.md):
+# a narrow, guarded exception to "the panel stays read-only for bulk imports" —
+# content arrives on stdin only (never a filesystem path), is validated BEFORE
+# anything is deleted, and --dry-run never writes. See import_upload below.
+UPLOAD_MAX_BYTES = 5 * 1024 * 1024
+_REQUIRED_COLUMNS = ("start_time", "exercise_title", "set_index")
+_WEIGHT_COLUMNS = ("weight_kg", "weight_lbs")
+
+
+def _upload_text(stdin):
+    """Bounded UTF-8 decode of the raw upload (BOM tolerant); never touches disk."""
+    if stdin is None:
+        raise TypeError("import_upload requires an explicit stdin stream")
+    raw = stdin.buffer.read(UPLOAD_MAX_BYTES + 1) if hasattr(stdin, "buffer") else stdin.read()
+    if isinstance(raw, str):
+        raw = raw.encode("utf-8", errors="surrogateescape")
+    if not raw:
+        raise SystemExit("empty hevy CSV upload")
+    if len(raw) > UPLOAD_MAX_BYTES:
+        raise SystemExit(f"hevy CSV upload too large (>{UPLOAD_MAX_BYTES // 1_000_000} MB)")
+    try:
+        return raw.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise SystemExit(f"hevy CSV upload is not valid UTF-8: {exc}")
+
+
+def _validate_upload(text):
+    """Guard the CSV BEFORE any row is deleted. Returns the dry-run/real-run
+    summary fields; raises SystemExit naming the first problem otherwise."""
+    reader = csv.DictReader(io.StringIO(text, newline=""))
+    columns = reader.fieldnames or []
+    missing = [c for c in _REQUIRED_COLUMNS if c not in columns]
+    if missing:
+        raise SystemExit(f"hevy CSV is missing required column(s): {', '.join(missing)}")
+    if not any(c in columns for c in _WEIGHT_COLUMNS):
+        raise SystemExit("hevy CSV must include weight_kg or weight_lbs")
+    rows = list(reader)
+    if not rows:
+        raise SystemExit(
+            "hevy CSV has no data rows — refusing to replace existing history with an empty export"
+        )
+    workouts, exercises, dates = set(), set(), []
+    for index, row in enumerate(rows, start=1):
+        raw_date = row.get("start_time")
+        day = parse_date(raw_date)
+        if day is None:
+            raise SystemExit(
+                f"row {index}: start_time {raw_date!r} is not a recognized Hevy date — refusing "
+                "to store a row with no date"
+            )
+        dates.append(day)
+        workouts.add((day, row.get("start_time")))
+        if row.get("exercise_title"):
+            exercises.add(row.get("exercise_title"))
+    return {
+        "rows": len(rows), "workouts": len(workouts), "exercises": len(exercises),
+        "first_date": min(dates), "last_date": max(dates),
+    }
+
+
+def import_upload(context: CommandContext, *, stdin, dry_run, parse_number):
+    """Validate a Hevy CSV export carried on stdin, then — unless `dry_run` —
+    replace `source='hevy'` history in the same one-transaction contract as
+    `import_csv`. Dry runs perform no write (a pure parse plus a read-only
+    count); a real run rolls back fully on any error."""
+    text = _upload_text(stdin)
+    summary = _validate_upload(text)
+    connection = runtime.connect(context.database)
+    try:
+        migrations.require_table(connection, "hevy_sets", ("source",))
+        existing = connection.execute(
+            "SELECT COUNT(*) AS n FROM hevy_sets WHERE source='hevy'"
+        ).fetchone()["n"]
+        if not dry_run:
+            with connection:
+                replace_history(connection, io.StringIO(text, newline=""),
+                                 parse_number=parse_number)
+        return {
+            "ok": True, "dry_run": bool(dry_run), "existing_hevy_rows": existing,
+            "replaced": not dry_run, **summary,
+        }
     finally:
         connection.close()
 

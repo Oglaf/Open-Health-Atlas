@@ -171,7 +171,11 @@ history. JSON workout imports retain their separate shrink guard and explicit
 force option. Manual records, provider-specific update rules and ingestion-time
 behavior are preserved. Routine import snapshots and quarterly observation triggers
 remain in their import transaction. Bulk imports remain excluded from both broker
-allowlists.
+allowlists, with one narrow, guarded exception on the panel bridge only:
+`import-hevy-upload` (§hevy-panel-import, this fork — see
+PRODUCT_AUTHORITY.md) takes the CSV on stdin, never a filesystem path, and
+validates every row before deleting any existing `source='hevy'` row; a
+`--dry-run` performs the same validation without writing.
 
 The explicit Hermes engine inventory includes the extracted runtime modules.
 Recursive exact-cache identity still covers toolkit Python source.

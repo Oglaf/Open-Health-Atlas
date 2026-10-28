@@ -570,7 +570,7 @@
     }).join("");
   }
 
-  const BC_TREND_CHARTS = ["ch-bc-weight", "ch-bc-bodyfat", "ch-bc-muscle", "ch-bc-visceral"];
+  const BC_TREND_CHARTS = ["ch-bc-muscle", "ch-bc-visceral"];
 
   function bodyCompositionRender(data) {
     const emptyEl = document.getElementById("bc-empty");
@@ -614,18 +614,14 @@
     }
     const dates = trend.map((t) => t.date);
     const P = pal();
-    chart("ch-bc-weight").setOption(lineOpt(dates, [
-      { n: "Weight", d: trend.map((t) => t.weight_kg), c: P.accent },
-      { n: "Fat mass", d: trend.map((t) => t.fat_mass_kg), c: P.warn },
-    ]));
-    chart("ch-bc-bodyfat").setOption(lineOpt(dates, [
-      { n: "Body fat %", d: trend.map((t) => t.body_fat_pct), c: P.bad },
-    ]));
+    // Weight / fat % already trend on the existing Body cards (a scan mirrors
+    // into body_metrics); only metrics with no other chart get one here.
+    // symbol:"circle" so a single scan still draws a point.
     chart("ch-bc-muscle").setOption(lineOpt(dates, [
-      { n: "Skeletal muscle", d: trend.map((t) => t.skeletal_muscle_kg), c: P.good },
+      { n: "Skeletal muscle", d: trend.map((t) => t.skeletal_muscle_kg), c: P.good, symbol: "circle" },
     ]));
     chart("ch-bc-visceral").setOption(lineOpt(dates, [
-      { n: "Visceral fat grade", d: trend.map((t) => t.visceral_fat_grade), c: P.warn },
+      { n: "Visceral fat grade", d: trend.map((t) => t.visceral_fat_grade), c: P.warn, symbol: "circle" },
     ]));
   }
 

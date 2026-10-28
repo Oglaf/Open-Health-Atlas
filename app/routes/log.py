@@ -24,7 +24,14 @@ ACTIVITY_WRITES = (
     "commitment-set", "log-commitment", "checkin", "routine-set",
     "routine-remove", "routine-undo", "schedule-set", "write-note",
     "hypothesis-promote", "hermes-model-set", "log-body-composition",
+    "import-hevy-upload",
 )
+
+# §hevy-panel-import (fork owner decision 2026-10-28, docs/PRODUCT_AUTHORITY.md):
+# the bridge's own 8 MiB request-line cap has to fit the whole JSON envelope, so
+# the panel enforces a tighter cap on the raw upload itself before it ever
+# reaches the socket.
+MAX_HEVY_CSV_BYTES = 5 * 1024 * 1024
 
 DAY_RATINGS = {"green", "yellow", "red"}
 # subjective 1–5 rating fields the quick-log offers
@@ -176,6 +183,36 @@ def body_composition():
     try:
         return jsonify(ok=True, result=bridge.run(
             "log-body-composition", stdin=json.dumps(body)))
+    except bridge.BridgeError as exc:
+        return jsonify(ok=False, error=str(exc)), 400
+
+
+@bp.post("/hevy-import")
+def hevy_import():
+    """Accept one Hevy workout-history CSV export (multipart `file`) and
+    forward its text verbatim through the guarded `import-hevy-upload` writer
+    (§hevy-panel-import, fork owner decision 2026-10-28, PRODUCT_AUTHORITY.md).
+    This is the ONE exception to "the panel stays read-only for bulk imports":
+    every guard (required columns, at least one data row, every date parses)
+    lives in health.py, not here — this route only shapes the transport and
+    rejects what would never survive it (missing/empty/oversized/non-UTF-8)."""
+    upload = request.files.get("file")
+    if upload is None or not upload.filename:
+        return jsonify(ok=False, error="a CSV file is required"), 400
+    raw = upload.read(MAX_HEVY_CSV_BYTES + 1)
+    if not raw:
+        return jsonify(ok=False, error="the uploaded file is empty"), 400
+    if len(raw) > MAX_HEVY_CSV_BYTES:
+        return jsonify(ok=False, error="file exceeds the 5 MB limit"), 400
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return jsonify(ok=False, error="file must be UTF-8 text"), 400
+    args = ["import-hevy-upload"]
+    if request.form.get("dry_run") == "1":
+        args.append("--dry-run")
+    try:
+        return jsonify(ok=True, result=bridge.run(*args, stdin=text))
     except bridge.BridgeError as exc:
         return jsonify(ok=False, error=str(exc)), 400
 

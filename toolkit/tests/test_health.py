@@ -89,6 +89,22 @@ def test_import_hevy_miles_converted(db, tmp_path):
     assert rows(db, "SELECT distance_km FROM hevy_sets") == [{"distance_km": 3.219}]
 
 
+def test_import_hevy_comma_separated_app_export_dates(db, tmp_path):
+    # Hevy's own CSV export writes "Oct 13, 2026, 9:03 PM" (comma, no "at").
+    csv = tmp_path / "hevy.csv"
+    csv.write_text(
+        '"title","start_time","end_time","exercise_title","set_index","set_type","weight_kg","reps"\n'
+        '"Treino – A ☀️","Oct 13, 2026, 9:03 PM","Oct 13, 2026, 9:26 PM","Squat (Barbell)",0,"normal",40,8\n'
+        '"Treino – A ☀️","Mar 3, 2025, 11:05 AM","Mar 3, 2025, 12:00 PM","Squat (Barbell)",0,"normal",30,8\n',
+        encoding="utf-8",
+    )
+
+    run(db, "import-hevy", str(csv))
+
+    assert [r["date"] for r in rows(db, "SELECT date FROM hevy_sets ORDER BY date")] == [
+        "2025-03-03", "2026-10-13"]
+
+
 def test_import_hevy_unknown_optional_values_stay_missing(db, tmp_path):
     csv = tmp_path / "hevy.csv"
     csv.write_text("start_time,exercise_title,weight_kg,duration_seconds,rpe\n"
@@ -194,6 +210,135 @@ def test_import_hevy_refuses_missing_source_without_ddl(tmp_path):
     assert result.returncode == 1
     assert json.loads(result.stdout)["error"]["code"] == "schema_migration_required"
     assert "source" not in {row[1] for row in sqlite3.connect(p).execute("PRAGMA table_info(hevy_sets)")}
+
+
+# ------------------------------------------------------- import-hevy-upload
+# §hevy-panel-import (fork owner decision 2026-10-28, docs/PRODUCT_AUTHORITY.md):
+# the ONE guarded bulk-import exception reachable from the panel. Content
+# arrives on stdin only (never a path) and is fully validated before any
+# existing row is deleted.
+def run_bytes(db, *args, stdin_bytes, expect_ok=True):
+    """Like run(), but feeds raw bytes on stdin without forcing a text-mode
+    encode — needed to exercise the non-UTF-8 rejection guard."""
+    r = subprocess.run([sys.executable, str(HEALTH), *args],
+                       env={**os.environ, "HEALTH_DB": str(db)},
+                       input=stdin_bytes, capture_output=True, timeout=30)
+    if expect_ok:
+        assert r.returncode == 0, f"{args}: {r.stderr or r.stdout}"
+    return r
+
+
+HEVY_UPLOAD_CSV = (
+    "title,start_time,end_time,exercise_title,set_index,set_type,weight_kg,reps\n"
+    "fullbody Mandag,2026-07-01 10:00:00,2026-07-01 11:00:00,Front Squat,1,normal,60,8\n"
+    "fullbody Mandag,2026-07-01 10:00:00,2026-07-01 11:00:00,Front Squat,2,normal,60,7\n"
+)
+
+
+def test_import_hevy_upload_dry_run_leaves_db_unchanged(db):
+    before = rows(db, "SELECT * FROM hevy_sets")
+
+    result = run(db, "import-hevy-upload", "--dry-run", stdin=HEVY_UPLOAD_CSV)
+
+    assert jout(result) == {
+        "ok": True, "dry_run": True, "rows": 2, "workouts": 1, "exercises": 1,
+        "first_date": "2026-07-01", "last_date": "2026-07-01",
+        "existing_hevy_rows": 0, "replaced": False,
+    }
+    assert rows(db, "SELECT * FROM hevy_sets") == before
+
+
+def test_import_hevy_upload_real_run_replaces_hevy_rows_keeps_ui_rows(db):
+    run(db, "log-set", "Deadlift", "--reps", "5", "--weight", "80", "--date", "2026-07-05")
+    ui_before = rows(db, "SELECT * FROM hevy_sets WHERE source='ui'")
+
+    out = jout(run(db, "import-hevy-upload", stdin=HEVY_UPLOAD_CSV))
+
+    assert out["ok"] is True and out["dry_run"] is False and out["replaced"] is True
+    assert out["rows"] == 2 and out["existing_hevy_rows"] == 0
+    assert len(rows(db, "SELECT * FROM hevy_sets WHERE source='hevy'")) == 2
+    assert rows(db, "SELECT * FROM hevy_sets WHERE source='ui'") == ui_before
+
+    # Re-importing replaces, not doubles.
+    out2 = jout(run(db, "import-hevy-upload", stdin=HEVY_UPLOAD_CSV))
+    assert out2["existing_hevy_rows"] == 2
+    assert len(rows(db, "SELECT * FROM hevy_sets WHERE source='hevy'")) == 2
+
+
+def test_import_hevy_upload_comma_separated_app_export_dates(db):
+    # Hevy's own CSV export writes "Oct 13, 2026, 9:03 PM" (comma, no "at").
+    csv_text = (
+        '"title","start_time","end_time","exercise_title","set_index","set_type","weight_kg","reps"\n'
+        '"Treino – A ☀️","Oct 13, 2026, 9:03 PM","Oct 13, 2026, 9:26 PM","Squat (Barbell)",0,"normal",40,8\n'
+    )
+
+    out = jout(run(db, "import-hevy-upload", stdin=csv_text))
+
+    assert out["ok"] is True
+    assert rows(db, "SELECT date FROM hevy_sets") == [{"date": "2026-10-13"}]
+
+
+def test_import_hevy_upload_rejects_unknown_date_and_leaves_db_untouched(db):
+    before = rows(db, "SELECT * FROM hevy_sets")
+    csv_text = ("start_time,exercise_title,set_index,weight_kg\n"
+                "not-a-date,Front Squat,1,60\n")
+
+    result = run(db, "import-hevy-upload", stdin=csv_text, expect_ok=False)
+
+    assert result.returncode != 0
+    assert "not-a-date" in (result.stdout + result.stderr)
+    assert rows(db, "SELECT * FROM hevy_sets") == before
+
+
+def test_import_hevy_upload_rejects_empty_export(db):
+    before = rows(db, "SELECT * FROM hevy_sets")
+
+    result = run(db, "import-hevy-upload",
+                 stdin="start_time,exercise_title,set_index,weight_kg\n", expect_ok=False)
+
+    assert result.returncode != 0
+    assert rows(db, "SELECT * FROM hevy_sets") == before
+
+
+def test_import_hevy_upload_rejects_missing_required_columns(db):
+    result = run(db, "import-hevy-upload",
+                 stdin="start_time,weight_kg\n2026-07-01,60\n", expect_ok=False)
+    assert result.returncode != 0
+
+
+def test_import_hevy_upload_rejects_oversize(db):
+    oversized = "x" * (5 * 1024 * 1024 + 1)
+
+    result = run(db, "import-hevy-upload", stdin=oversized, expect_ok=False)
+
+    assert result.returncode != 0
+    assert rows(db, "SELECT * FROM hevy_sets") == []
+
+
+def test_import_hevy_upload_rejects_non_utf8(db):
+    result = run_bytes(db, "import-hevy-upload",
+                       stdin_bytes=b"start_time,exercise_title\n\xff\xfe,Squat\n", expect_ok=False)
+
+    assert result.returncode != 0
+
+
+def test_import_hevy_upload_accepts_bom(db):
+    csv_text = "﻿" + HEVY_UPLOAD_CSV
+
+    out = jout(run(db, "import-hevy-upload", stdin=csv_text))
+
+    assert out["ok"] is True and out["rows"] == 2
+
+
+def test_import_hevy_upload_lbs_and_miles_converted(db):
+    csv_text = ("start_time,exercise_title,set_index,weight_lbs,distance_miles\n"
+                "2026-07-01,Running,1,100,2\n")
+
+    run(db, "import-hevy-upload", stdin=csv_text)
+
+    got = rows(db, "SELECT weight_kg, distance_km FROM hevy_sets")[0]
+    assert got["weight_kg"] == 45.36
+    assert got["distance_km"] == 3.219
 
 
 # -------------------------------------------------------------------- log-set

@@ -14,6 +14,14 @@
       <span class="muted micro">muscle + athletic radars · strength &amp; balance</span>
     </div>
     <div class="row gap-2 wrap">
+      {# §hevy-panel-import (fork owner decision 2026-10-28,
+         docs/PRODUCT_AUTHORITY.md): the ONE guarded exception to "the panel
+         stays read-only for bulk imports" — owner request: "all hevy data is
+         located in /training right? ... we could add an import button at the
+         very top." Flow (training.js): pick a .csv -> automatic dry run ->
+         confirm panel (#hevy-import-panel) -> real run -> reload. #}
+      <input type="file" id="hevy-import-file" accept=".csv,text/csv" hidden>
+      <button class="btn" id="hevy-import-btn" type="button">Import Hevy CSV</button>
       {# task-37: global period dd — windows the time-series trend cards
          (Weight, Progression, Weight-to-strength). The radars (Muscle Balance
          is a fixed 7-day effective-volume window by engine design; Athletic is
@@ -32,6 +40,16 @@
         </div>
       </div>
       <a class="back" href="{{ url_for('core.labs') }}">Bloodwork → Labs ↗</a>
+    </div>
+  </div>
+
+  <div class="card" id="hevy-import-panel" hidden>
+    <h3 class="card-title mb-2">Import Hevy CSV</h3>
+    <p class="muted note-txt" id="hevy-import-summary"></p>
+    <div class="row gap-2 mt-2 wrap">
+      <button class="btn" id="hevy-import-confirm" type="button">Confirm replace</button>
+      <button class="btn quiet" id="hevy-import-cancel" type="button">Cancel</button>
+      <span class="muted micro" id="hevy-import-msg"></span>
     </div>
   </div>
 

@@ -74,6 +74,14 @@ COMMAND_FLAGS = {
     # stdin, no flags) + a bounded read.
     "log-body-composition": set(),
     "body-composition":     {"--days", "--latest"},
+    # §hevy-panel-import (fork owner decision 2026-10-28,
+    # docs/PRODUCT_AUTHORITY.md): ONE narrow, guarded exception to "the panel
+    # stays read-only for bulk imports" — the CSV arrives on stdin only, never
+    # a filesystem path, is fully validated before any row is deleted, and
+    # --dry-run never writes. The collector-only import-hevy, import-hevy-json,
+    # import-hevy-routines, import-hevy-templates and import-hevy-body stay OFF
+    # every allowlist, unchanged (tests/test_bridge.py, tests/test_local_mcp_write.py).
+    "import-hevy-upload":   {"--dry-run"},
     # T44 targets engine — read-only compute, zero flags (profile-set /
     # phase-set / nutrition-target-set are owner config, NOT here)
     "nutrition-targets":   set(),
@@ -150,7 +158,7 @@ CLIENT_FLAG_CHECKS = {
 }
 
 # store_true flags consume no following value; other allowed flags consume one.
-NO_VALUE_FLAGS = {"--all", "--include-provenance", "--latest"}
+NO_VALUE_FLAGS = {"--all", "--include-provenance", "--latest", "--dry-run"}
 
 # Comprehensive fictional reads on the capped one-CPU host took 449s for
 # all-mode Explorer and 443s for full pairwise evidence replay. The finite 570s
