@@ -153,12 +153,64 @@ Migrations are forward-only; never overwrite the only copy of a database
 before confirming a migration succeeded (see
 [DEPLOYMENT.md's migration guidance](DEPLOYMENT.md#analysis-request-budget)).
 
+## Scheduled wearable collector
+
+Fork owner decision, 2026-10-28 (see
+[PRODUCT_AUTHORITY.md](PRODUCT_AUTHORITY.md)): an optional `ghealth` compose
+service runs the Google Health collector (`deploy/ghealth-sync`) as a
+container instead of the root systemd timer described in
+[DEPLOYMENT.md](DEPLOYMENT.md). It is profile-gated
+(`profiles: ["ghealth"]`) — `docker compose up` never starts it, and starting
+it is a separate, explicit decision per installation. It is a single-account
+collector: one container writes into exactly one configured `HEALTH_DB`
+(the owner's `health.db`, or one member's `/data/users/<id>/health.db`), the
+same one-user-per-run shape as the systemd collector. Weight lands in
+`body_metrics` with `source='fitbit'`; sleep, steps, active energy and the
+daily physiology metrics land the same way the systemd collector already
+writes them. The dashboard/engine source order (manual > fitbit > BIA scan >
+Hevy) already ranks a Fitbit-sourced weight correctly against the other
+writers.
+
+To set it up:
+
+1. Create `deploy/docker/ghealth.json` from
+   `deploy/docker/ghealth.json.example` — either by running
+   `deploy/ghealth-auth` (see its own docstring; it needs a browser and an SSH
+   tunnel if run on a headless host) and copying the resulting
+   `/etc/hermes/ghealth.json` here, or by copying an existing authorization
+   from another installation. The file holds `client_id`, `client_secret` and
+   `refresh_token` — never commit it (the repository `.gitignore` excludes
+   `ghealth.json`, keeping only the `.example` template). It must stay uid
+   1000, mode 0600; the container mounts it read-only at `/creds/ghealth.json`
+   and only `deploy/ghealth-sync` inside that one container ever reads it — it
+   never reaches the panel, the broker, or any agent.
+2. Set `HEALTH_DB` on the `ghealth` service in `docker-compose.yml` to the
+   exact database you want it to update.
+3. Start it explicitly: `docker compose --profile ghealth up -d ghealth` (or
+   set `COMPOSE_PROFILES=ghealth` before `docker compose up -d`).
+
+Cadence defaults to every 6 hours (`GHEALTH_INTERVAL_SECONDS=21600`; the
+minimum is 900 seconds). Each run fetches a 3-day lookback window
+(`HERMES_GHEALTH_LOOKBACK_DAYS`, clamped 1–14) so one missed cycle still gets
+caught up on the next. A failed run is logged to the container's stdout/stderr
+and retried on the next cycle — the container never exits because of one bad
+run. Check freshness on the panel's Integrations card (the "Wearable" row
+reads the same `daily_metrics` `source='fitbit'` rows this collector writes);
+`docker compose logs ghealth` shows one secret-free status line per run
+(UTC timestamp, exit code, duration). Roll back by stopping the container
+(`docker compose stop ghealth`, or `docker compose --profile ghealth down`) —
+it holds no socket and no persistent process elsewhere; stopping it simply
+stops future imports.
+
 ## Limits (phase 1 of multi-user)
 
 This image ships exactly the Phase 1 multi-user scope described in
 [MULTI_USER.md](MULTI_USER.md#phase-1-scope-this-branch): per-user `health.db`
 and vault, admin user management, and cross-user isolation. It does **not**
-include the Hermes chat/agent integration, Telegram, scheduled collectors
-(Hevy, Google Health), or the standalone MCP server — those remain
-single-process, single-account integrations documented in
-[DEPLOYMENT.md](DEPLOYMENT.md) and are out of scope for this container image.
+include the Hermes chat/agent integration, Telegram, the Hevy scheduled
+collector, or the standalone MCP server — those remain single-process,
+single-account integrations documented in [DEPLOYMENT.md](DEPLOYMENT.md) and
+are out of scope for this container image. The optional `ghealth` service
+above is the one exception: it is still single-account and never started by
+default, but it runs as a container rather than requiring the separate
+systemd/cron host DEPLOYMENT.md otherwise describes.

@@ -2,6 +2,8 @@
 .env
 .env.*
 !.env.example
+ghealth.json
+!ghealth.json.example
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/

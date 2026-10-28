@@ -23,6 +23,17 @@ that type with a stderr warning and the rest still lands; only total failure
 (every type errored, or the import itself fails) exits non-zero so cron
 mails/logs it. Pure stdlib; the transform functions below are pure and
 unit-tested in toolkit/tests/test_ghealth_sync.py (no network in tests).
+
+Container mode (`HERMES_GHEALTH_MODE=container`, set by the `ghealth` compose
+service — see docs/DOCKER.md "Scheduled wearable collector"): there is no root
+wrapper and no separate "hermes" data-owner account to drop to, so this script
+runs `import-google-health`/`collector-run-record` directly as the container's
+single uid instead of through `sudo -u hermes`, and skips the root-only
+privilege check and the cross-user `chown`. Fork owner decision 2026-10-28
+(docs/PRODUCT_AUTHORITY.md "Fork deployment: scheduled Google Health
+collector container") authorizes this mode; it uses the same trust model as
+the systemd path otherwise — the script never opens the DB itself, every
+write goes through health.py.
 """
 import json
 import os
@@ -37,6 +48,10 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+MODE = os.environ.get("HERMES_GHEALTH_MODE", "systemd")
+if MODE not in ("systemd", "container"):
+    sys.exit(f"HERMES_GHEALTH_MODE must be 'systemd' or 'container', got {MODE!r}")
+
 CONFIG = os.environ.get(
     "HERMES_GHEALTH_CONFIG",
     os.path.join(os.environ["CREDENTIALS_DIRECTORY"], "ghealth.json")
@@ -44,11 +59,28 @@ CONFIG = os.environ.get(
 )
 BASE = "https://health.googleapis.com/v4"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
-HEALTH = os.environ.get("HERMES_HEALTH_CLI", "/opt/hermes/toolkit/health.py")
+_DEFAULT_HEALTH = ("/app/toolkit/health.py" if MODE == "container"
+                   else "/opt/hermes/toolkit/health.py")
+HEALTH = os.environ.get("HERMES_HEALTH_CLI", _DEFAULT_HEALTH)
 CANON_TZ = ZoneInfo(os.environ.get("HERMES_TIMEZONE", "UTC"))
-LOOKBACK_DAYS = 2   # window starts at local midnight 2 days back: yesterday is
-                    # always COMPLETE (a partial-window sum would overwrite a
-                    # previously-correct daily total); today tops up next run.
+
+
+def _clamped_lookback_days(default):
+    raw = os.environ.get("HERMES_GHEALTH_LOOKBACK_DAYS")
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return max(1, min(14, value))
+
+
+# window starts at local midnight N days back: yesterday is always COMPLETE (a
+# partial-window sum would overwrite a previously-correct daily total); today
+# tops up next run. Systemd's default stays 2; the container's longer-running
+# schedule defaults to 3 so one missed 6-hour cycle still gets caught up.
+LOOKBACK_DAYS = _clamped_lookback_days(3 if MODE == "container" else 2)
 PAGE_SIZE = 100
 MAX_PAGES = 50      # hard cap — never loop unbounded on a network value
 
@@ -115,9 +147,18 @@ def _error_code(stage):
     return "collector_failed"
 
 
+def _invoke(*args):
+    """argv for one health.py subcommand: drop to the hermes data owner via
+    sudo in systemd mode (the root wrapper's only privileged use), or invoke
+    directly as the container's own non-root uid in container mode."""
+    if MODE == "container":
+        return ["python3", HEALTH, *args]
+    return ["sudo", "-u", "hermes", "python3", HEALTH, *args]
+
+
 def _record_run(state, status, error_code=None):
     """Append secret-free operational provenance without changing exit state."""
-    if os.geteuid() != 0:
+    if MODE == "systemd" and os.geteuid() != 0:
         return  # the recorder is intentionally reachable only by the root wrapper
     payload = {
         "source": "google-health",
@@ -135,8 +176,7 @@ def _record_run(state, status, error_code=None):
     }
     try:
         result = subprocess.run(
-            ["sudo", "-u", "hermes", "python3", HEALTH,
-             "collector-run-record", "--stdin"],
+            _invoke("collector-run-record", "--stdin"),
             input=json.dumps(payload, separators=(",", ":")),
             capture_output=True, text=True, timeout=30,
         )
@@ -498,9 +538,10 @@ def fetch_type(token, dt, start_local):
 
 def main(state=None):
     state = state if state is not None else _run_state()
-    state["stage"] = "privilege_check"
-    if os.geteuid() != 0:
-        sys.exit("run as root (cron) — the credentials file is root-only")
+    if MODE == "systemd":
+        state["stage"] = "privilege_check"
+        if os.geteuid() != 0:
+            sys.exit("run as root (cron) — the credentials file is root-only")
     state["stage"] = "configuration"
     cfg = load_config()
     state["stage"] = "authentication"
@@ -541,17 +582,20 @@ def main(state=None):
     payload = build_payload(days)
 
     staging = tempfile.mkdtemp(prefix="ghealth-sync-")
-    shutil.chown(staging, group="hermes")
-    os.chmod(staging, 0o750)
+    if MODE == "systemd":
+        shutil.chown(staging, group="hermes")
+        os.chmod(staging, 0o750)
     try:
         p = os.path.join(staging, "payload.json")
         with open(p, "w") as f:
             json.dump(payload, f)
-        shutil.chown(p, group="hermes")
-        os.chmod(p, 0o640)
+        if MODE == "systemd":
+            shutil.chown(p, group="hermes")
+            os.chmod(p, 0o640)
+        else:
+            os.chmod(p, 0o600)
         state["stage"] = "import"
-        r = subprocess.run(["sudo", "-u", "hermes", "python3", HEALTH,
-                            "import-google-health", p],
+        r = subprocess.run(_invoke("import-google-health", p),
                            capture_output=True, text=True, timeout=120)
         if r.returncode != 0:
             sys.exit(f"import-google-health failed: {r.stderr or r.stdout}")

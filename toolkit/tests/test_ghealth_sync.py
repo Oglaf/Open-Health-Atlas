@@ -6,8 +6,12 @@ dailyRestingHeartRate.beatsPerMinute, weight.weightGrams, steps.count, ...).
 NO network anywhere in this file — the transforms are pure functions, loaded
 from the script file (broker-test idiom: deploy scripts have no .py suffix).
 """
+import os
 import pathlib
+import stat
 import types
+
+import pytest
 
 SYNC = pathlib.Path(__file__).resolve().parent.parent.parent / "deploy" / "ghealth-sync"
 
@@ -16,6 +20,10 @@ def _load():
     mod = types.ModuleType("ghealth_sync")
     exec(compile(SYNC.read_text(), str(SYNC), "exec"), mod.__dict__)
     return mod
+
+
+def _ok(stdout='{"ok": true}'):
+    return types.SimpleNamespace(returncode=0, stdout=stdout, stderr="")
 
 
 def sleep_dp(start="2026-07-16T20:30:00Z", end="2026-07-17T04:30:00Z",
@@ -271,3 +279,161 @@ def test_payload_shape_matches_import_contract():
     (day,) = payload["days"]
     assert day["date"] == "2026-07-17"
     assert set(day) <= {"date", "metrics", "sleep", "weight_kg"}
+
+
+# ── container mode (HERMES_GHEALTH_MODE=container) ──────────────────────────
+# Fork owner decision 2026-10-28 (docs/PRODUCT_AUTHORITY.md "Fork deployment:
+# scheduled Google Health collector container"): the same collector, run
+# without a root wrapper or a separate "hermes" data-owner account. Systemd
+# mode must stay byte-for-byte unchanged (test_collector_provenance.py and the
+# fixtures above already pin it without any env override).
+
+def test_invalid_mode_exits(monkeypatch):
+    monkeypatch.setenv("HERMES_GHEALTH_MODE", "bogus")
+    with pytest.raises(SystemExit, match="HERMES_GHEALTH_MODE"):
+        _load()
+
+
+def test_default_health_cli_path_differs_by_mode(monkeypatch):
+    monkeypatch.delenv("HERMES_HEALTH_CLI", raising=False)
+    monkeypatch.delenv("HERMES_GHEALTH_MODE", raising=False)
+    assert _load().HEALTH == "/opt/hermes/toolkit/health.py"
+
+    monkeypatch.setenv("HERMES_GHEALTH_MODE", "container")
+    assert _load().HEALTH == "/app/toolkit/health.py"
+
+
+def test_container_mode_config_path_honors_env_override(monkeypatch, tmp_path):
+    monkeypatch.setenv("HERMES_GHEALTH_MODE", "container")
+    cfg_path = str(tmp_path / "creds.json")
+    monkeypatch.setenv("HERMES_GHEALTH_CONFIG", cfg_path)
+    assert _load().CONFIG == cfg_path
+
+
+@pytest.mark.parametrize("mode,env_value,expected", [
+    ("systemd", None, 2),
+    ("container", None, 3),
+    ("systemd", "14", 14),
+    ("container", "1", 1),
+    ("systemd", "0", 1),             # clamps to the floor
+    ("container", "99", 14),         # clamps to the ceiling
+    ("systemd", "not-a-number", 2),  # falls back to the mode default
+])
+def test_lookback_days_env_default_and_clamp(monkeypatch, mode, env_value, expected):
+    monkeypatch.setenv("HERMES_GHEALTH_MODE", mode)
+    if env_value is None:
+        monkeypatch.delenv("HERMES_GHEALTH_LOOKBACK_DAYS", raising=False)
+    else:
+        monkeypatch.setenv("HERMES_GHEALTH_LOOKBACK_DAYS", env_value)
+    assert _load().LOOKBACK_DAYS == expected
+
+
+def test_container_mode_record_run_executes_without_root(monkeypatch):
+    monkeypatch.setenv("HERMES_GHEALTH_MODE", "container")
+    m = _load()
+    monkeypatch.setattr(m.os, "geteuid", lambda: 1000)  # never root in a container
+    calls = []
+    monkeypatch.setattr(m.subprocess, "run",
+                        lambda *a, **kw: calls.append((a, kw)) or _ok(""))
+    state = {
+        "started_at": "2026-07-23T01:02:03+00:00", "rows_seen": 1,
+        "rows_written": 1, "coverage_from": "2026-07-21",
+        "coverage_to": "2026-07-22", "warning_codes": set(),
+    }
+    m._record_run(state, "success")
+
+    assert calls, "container mode must still record the run without root"
+    args = calls[0][0][0]
+    assert "sudo" not in args
+    assert args[0] == "python3" and args[-2:] == ["collector-run-record", "--stdin"]
+
+
+def test_systemd_mode_record_run_still_requires_root(monkeypatch):
+    """Regression: systemd mode keeps its root-only recorder guard unchanged."""
+    monkeypatch.delenv("HERMES_GHEALTH_MODE", raising=False)
+    m = _load()
+    monkeypatch.setattr(m.os, "geteuid", lambda: 1000)
+    calls = []
+    monkeypatch.setattr(m.subprocess, "run",
+                        lambda *a, **kw: calls.append((a, kw)) or _ok(""))
+    state = {
+        "started_at": "2026-07-23T01:02:03+00:00", "rows_seen": 1,
+        "rows_written": 1, "coverage_from": "2026-07-21",
+        "coverage_to": "2026-07-22", "warning_codes": set(),
+    }
+    m._record_run(state, "success")
+    assert calls == []
+
+
+def _patch_fetch_single_weight(m, monkeypatch):
+    """Short-circuit the network: every data type fetches empty except a
+    single fictional weight sample, enough to drive one non-empty day through
+    transform()/build_payload() without any real API call."""
+    def fake_fetch(token, dt, start_local):
+        if dt == "weight":
+            return [{"weight": {"sampleTime": {"physicalTime": "2026-07-17T05:00:00Z"},
+                                "weightGrams": "67000"}}]
+        return []
+    monkeypatch.setattr(m, "load_config",
+                        lambda: {"client_id": "x", "client_secret": "y",
+                                 "refresh_token": "z"})
+    monkeypatch.setattr(m, "access_token", lambda cfg: "fake-token")
+    monkeypatch.setattr(m, "fetch_type", fake_fetch)
+
+
+def test_container_mode_stages_payload_0600_no_sudo_and_cleans_up(monkeypatch):
+    monkeypatch.setenv("HERMES_GHEALTH_MODE", "container")
+    m = _load()
+    monkeypatch.setattr(m.os, "geteuid", lambda: 1000)
+    _patch_fetch_single_weight(m, monkeypatch)
+
+    captured_cmds, staged = [], []
+
+    def fake_run(cmd, **kwargs):
+        captured_cmds.append(list(cmd))
+        if "import-google-health" in cmd:
+            path = cmd[-1]
+            staged.append((path, stat.S_IMODE(os.stat(path).st_mode)))
+            return _ok()
+        return _ok("")
+
+    monkeypatch.setattr(m.subprocess, "run", fake_run)
+    m.run_collector()
+
+    assert captured_cmds, "expected at least the import-google-health call"
+    assert all("sudo" not in cmd for cmd in captured_cmds)
+    assert all(cmd[0] == "python3" for cmd in captured_cmds)
+    assert len(staged) == 1
+    path, mode = staged[0]
+    assert mode == 0o600
+    assert not os.path.exists(path), "payload must be removed in finally"
+    assert not os.path.exists(os.path.dirname(path)), "staging dir must be removed"
+
+
+def test_systemd_mode_still_uses_sudo_chown_and_0640_unchanged(monkeypatch):
+    monkeypatch.delenv("HERMES_GHEALTH_MODE", raising=False)
+    m = _load()
+    monkeypatch.setattr(m.os, "geteuid", lambda: 0)
+    _patch_fetch_single_weight(m, monkeypatch)
+
+    chown_calls = []
+    monkeypatch.setattr(m.shutil, "chown",
+                        lambda path, group=None: chown_calls.append((path, group)))
+
+    captured_cmds, staged = [], []
+
+    def fake_run(cmd, **kwargs):
+        captured_cmds.append(list(cmd))
+        if "import-google-health" in cmd:
+            path = cmd[-1]
+            staged.append((path, stat.S_IMODE(os.stat(path).st_mode)))
+            return _ok()
+        return _ok("")
+
+    monkeypatch.setattr(m.subprocess, "run", fake_run)
+    m.run_collector()
+
+    assert captured_cmds[0][:3] == ["sudo", "-u", "hermes"]
+    assert len(staged) == 1 and staged[0][1] == 0o640
+    assert len(chown_calls) == 2  # staging dir, then the payload file
+    assert all(group == "hermes" for _, group in chown_calls)

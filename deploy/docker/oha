@@ -1,13 +1,122 @@
 #!/usr/bin/env python3
 """Container entrypoint: dispatches to the panel, the broker, database/vault
-initialization, or the `flask` admin CLI. Not installed outside the image —
-see docs/DOCKER.md.
+initialization, the `flask` admin CLI, or the optional scheduled Google
+Health collector (`ghealth`). Not installed outside the image — see
+docs/DOCKER.md.
 """
 import os
+import signal
+import subprocess
 import sys
+import threading
+import time
+from datetime import datetime, timezone
 
 ROOT = "/app"
 sys.path.insert(0, ROOT)
+
+GHEALTH_SYNC_PATH = os.path.join(ROOT, "deploy", "ghealth-sync")
+GHEALTH_DEFAULT_INTERVAL_SECONDS = 21600  # 6 hours
+GHEALTH_MIN_INTERVAL_SECONDS = 900
+GHEALTH_STARTUP_GRACE_SECONDS = 900  # 15 minutes
+GHEALTH_HEARTBEAT_FILE = os.environ.get("GHEALTH_HEARTBEAT_FILE", "/tmp/ghealth-heartbeat")
+GHEALTH_STARTED_FILE = os.environ.get("GHEALTH_STARTED_FILE", "/tmp/ghealth-started")
+
+
+def _ghealth_interval_seconds(raw):
+    """Clamp GHEALTH_INTERVAL_SECONDS to a sane floor; a missing/invalid value
+    falls back to the 6-hour default (itself above the floor)."""
+    try:
+        value = int(raw) if raw not in (None, "") else GHEALTH_DEFAULT_INTERVAL_SECONDS
+    except ValueError:
+        value = GHEALTH_DEFAULT_INTERVAL_SECONDS
+    return max(GHEALTH_MIN_INTERVAL_SECONDS, value)
+
+
+def _run_ghealth_cycle():
+    """One collector cycle as a subprocess of deploy/ghealth-sync in container
+    mode. Output streams straight through to the container's own stdout/stderr
+    (never captured here), preserving the collector's own secret-free logging
+    rules. Returns (returncode, duration_seconds)."""
+    started = time.monotonic()
+    env = dict(os.environ)
+    env["HERMES_GHEALTH_MODE"] = "container"
+    result = subprocess.run([sys.executable, GHEALTH_SYNC_PATH], env=env)
+    return result.returncode, time.monotonic() - started
+
+
+def _log_ghealth_run(returncode, duration):
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    print(f"{ts} ghealth run exit={returncode} duration={duration:.1f}s", flush=True)
+
+
+def _touch(path):
+    with open(path, "w") as f:
+        f.write(datetime.now(timezone.utc).isoformat())
+
+
+def _interruptible_sleep(seconds, stop_event):
+    """threading.Event.wait already returns promptly once .set() runs inside a
+    signal handler, so SIGTERM interrupts a sleep instead of waiting it out."""
+    stop_event.wait(timeout=seconds)
+
+
+def ghealth_loop(*, run_once, sleep, stop_event, interval_seconds, heartbeat_path):
+    """Run `run_once()` -> (returncode, duration) forever until `stop_event` is
+    set, logging one status line per run and writing `heartbeat_path` only
+    after a successful (exit 0) run. A failed run is logged and retried next
+    cycle — this loop never exits because of a failed run; only `stop_event`
+    (SIGTERM) ends it. Extracted from `_ghealth_serve` so tests can supply a
+    fake runner/sleeper/clock instead of a real subprocess and real time."""
+    while not stop_event.is_set():
+        returncode, duration = run_once()
+        _log_ghealth_run(returncode, duration)
+        if returncode == 0:
+            _touch(heartbeat_path)
+        if stop_event.is_set():
+            break
+        sleep(interval_seconds, stop_event)
+
+
+def _ghealth_serve():
+    stop_event = threading.Event()
+    signal.signal(signal.SIGTERM, lambda signum, frame: stop_event.set())
+    interval = _ghealth_interval_seconds(os.environ.get("GHEALTH_INTERVAL_SECONDS"))
+    _touch(GHEALTH_STARTED_FILE)
+    ghealth_loop(run_once=_run_ghealth_cycle, sleep=_interruptible_sleep,
+                 stop_event=stop_event, interval_seconds=interval,
+                 heartbeat_path=GHEALTH_HEARTBEAT_FILE)
+    return 0
+
+
+def _ghealth_once():
+    returncode, duration = _run_ghealth_cycle()
+    _log_ghealth_run(returncode, duration)
+    return returncode
+
+
+def _ghealth_health_ok(*, heartbeat_mtime, started_mtime, interval_seconds, now):
+    """Healthy if the container is still inside its startup grace window (the
+    first run may legitimately not have landed yet), or the heartbeat marker
+    is younger than twice the run interval plus that same grace window."""
+    if started_mtime is not None and now - started_mtime < GHEALTH_STARTUP_GRACE_SECONDS:
+        return True
+    if heartbeat_mtime is not None and (
+            now - heartbeat_mtime < 2 * interval_seconds + GHEALTH_STARTUP_GRACE_SECONDS):
+        return True
+    return False
+
+
+def _ghealth_health_cli():
+    interval = _ghealth_interval_seconds(os.environ.get("GHEALTH_INTERVAL_SECONDS"))
+    now = time.time()
+    heartbeat_mtime = (os.path.getmtime(GHEALTH_HEARTBEAT_FILE)
+                       if os.path.exists(GHEALTH_HEARTBEAT_FILE) else None)
+    started_mtime = (os.path.getmtime(GHEALTH_STARTED_FILE)
+                     if os.path.exists(GHEALTH_STARTED_FILE) else None)
+    ok = _ghealth_health_ok(heartbeat_mtime=heartbeat_mtime, started_mtime=started_mtime,
+                            interval_seconds=interval, now=now)
+    return 0 if ok else 1
 
 
 def _init():
@@ -49,7 +158,8 @@ def _init():
 
 def main(argv):
     if not argv:
-        print("usage: oha {panel|broker|init|flask ...}", file=sys.stderr)
+        print("usage: oha {panel|broker|init|flask|ghealth|ghealth-health ...}",
+              file=sys.stderr)
         return 2
     cmd, rest = argv[0], argv[1:]
     os.chdir(ROOT)
@@ -63,6 +173,10 @@ def main(argv):
     if cmd == "init":
         _init()
         return 0
+    if cmd == "ghealth":
+        return _ghealth_once() if "--once" in rest else _ghealth_serve()
+    if cmd == "ghealth-health":
+        return _ghealth_health_cli()
     if cmd == "flask":
         os.execvp("flask", ["flask", *rest])
     if cmd in {"user-create", "user-list", "user-disable", "user-enable",

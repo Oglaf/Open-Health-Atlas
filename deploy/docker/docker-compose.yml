@@ -104,6 +104,53 @@ services:
       retries: 3
       start_period: 10s
 
+  # Optional scheduled Google Health collector — never started by default
+  # (`docker compose up` ignores it; only `--profile ghealth up -d ghealth` or
+  # `docker compose up -d` with COMPOSE_PROFILES=ghealth set does). See
+  # docs/DOCKER.md "Scheduled wearable collector" for setup, including how to
+  # create ghealth.json. Fork owner decision 2026-10-28
+  # (docs/PRODUCT_AUTHORITY.md): this container is the only new writer, and it
+  # writes through the same validated import-google-health/collector-run-record
+  # commands as the existing root systemd collector — never opens SQLite itself.
+  ghealth:
+    image: ${OHA_IMAGE:-ghcr.io/oglaf/open-health-atlas}:${OHA_TAG:-multi-user}
+    container_name: medical-oha-ghealth
+    profiles: ["ghealth"]
+    command: ["ghealth"]
+    restart: unless-stopped
+    mem_limit: 256m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+    env_file:
+      - .env
+    environment:
+      HERMES_GHEALTH_MODE: container
+      HERMES_GHEALTH_CONFIG: /creds/ghealth.json
+      # Exactly ONE user's database — the collector writes through
+      # import-google-health as a single configured account, same as the
+      # systemd collector. Point this at the owner's health.db, or one
+      # member's under /data/users/<id>/health.db.
+      HEALTH_DB: /data/users/<user>/health.db
+      # GHEALTH_INTERVAL_SECONDS: "21600"   # default 6h; minimum 900 (15m)
+    volumes:
+      - oha-data:/data
+      # The real credentials file: uid 1000, mode 0600, never committed (see
+      # deploy/docker/ghealth.json.example and the repository .gitignore).
+      - ./ghealth.json:/creds/ghealth.json:ro
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/oha", "ghealth-health"]
+      interval: 5m
+      timeout: 10s
+      retries: 3
+      start_period: 15m
+
   # Never started by default (`docker compose up` ignores it). Run one-off
   # admin commands with, e.g.:
   #   docker compose run --rm admin init

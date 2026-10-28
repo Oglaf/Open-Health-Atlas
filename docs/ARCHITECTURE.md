@@ -59,6 +59,17 @@ a root-owned adjacent copy and enforces every privileged request itself. The pan
 it stores WebAuthn credentials, sessions, audit events, conversation metadata,
 and UI state.
 
+The optional `ghealth` compose service (`HERMES_GHEALTH_MODE=container`; see
+[Docker deployment](DOCKER.md#scheduled-wearable-collector)) extends this same
+split to a scheduled collector: it holds no bridge socket and no broker
+access, only a mounted OAuth credentials file that `deploy/ghealth-sync`
+reads, and every write still crosses `health.py`'s collector-only
+`import-google-health` and `collector-run-record` commands — the same
+validated path the existing root systemd collector uses (§External
+boundaries). Neither command is reachable through the panel or either
+broker's allowlist (`deploy/bridge_commands.py`); this fork's authorization is
+recorded in [PRODUCT_AUTHORITY.md](PRODUCT_AUTHORITY.md).
+
 ## Major packages
 
 ### OpenHealthAtlas and the Hermes names

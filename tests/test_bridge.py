@@ -358,7 +358,8 @@ def test_phase3_and_phase4_exact_reads_allowed_and_all_writers_excluded():
     assert "correlate" not in bridge.ALLOWED
     assert "day-signature" not in bridge.ALLOWED
     for command in (
-        "goal-set", "collector-run-record", "schema-status", "schema-plan", "migrate",
+        "goal-set", "collector-run-record", "import-google-health",
+        "schema-status", "schema-plan", "migrate",
         "capture-raw", "capture-resolve", "event-log", "event-correct", "event-void",
         "capture-completeness-set", "entity-alias-set", "entity-alias-retire",
         "analysis-refresh", "finding-record", "hypothesis-refresh",

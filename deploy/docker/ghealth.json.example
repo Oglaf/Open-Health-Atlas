@@ -1,0 +1,5 @@
+{
+  "client_id": "replace-with-your-oauth-client-id",
+  "client_secret": "replace-with-your-oauth-client-secret",
+  "refresh_token": "replace-with-your-oauth-refresh-token"
+}

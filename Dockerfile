@@ -21,14 +21,16 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Only the runtime surface: application, toolkit, the three broker files
 # (deploy/hermes-bridge imports its adjacent bridge_commands.py by sitting next
 # to it, same as the systemd install), the database/vault initializer, generic
-# collector env examples, the bundled anatomy seed document, and the gunicorn
-# entrypoint. No tests, no desktop adapter, no docs images.
+# collector env examples, the optional scheduled Google Health collector
+# script (deploy/ghealth-sync — see docs/DOCKER.md "Scheduled wearable
+# collector"), the bundled anatomy seed document, and the gunicorn entrypoint.
+# No tests, no desktop adapter, no docs images.
 COPY app/ app/
 COPY toolkit/ toolkit/
 COPY config/ config/
 COPY docs/authored-submuscle-map.md docs/authored-submuscle-map.md
 COPY scripts/init_hermes.py scripts/init_hermes.py
-COPY deploy/hermes-bridge deploy/hermesctl deploy/bridge_commands.py deploy/
+COPY deploy/hermes-bridge deploy/hermesctl deploy/bridge_commands.py deploy/ghealth-sync deploy/
 COPY wsgi.py .
 COPY deploy/docker/oha /usr/local/bin/oha
 
@@ -37,7 +39,7 @@ COPY deploy/docker/oha /usr/local/bin/oha
 # vs read-write, not from differing uids (see docs/DOCKER.md). A real passwd
 # entry (not just USER 1000) keeps pwd.getpwuid() lookups in deploy/hermesctl
 # from crashing; home points at /app since nothing needs a writable HOME.
-RUN chmod 0755 /usr/local/bin/oha deploy/hermes-bridge deploy/hermesctl && \
+RUN chmod 0755 /usr/local/bin/oha deploy/hermes-bridge deploy/hermesctl deploy/ghealth-sync && \
     groupadd -g 1000 oha && \
     useradd -u 1000 -g 1000 -M -d /app -s /usr/sbin/nologin oha && \
     mkdir -p /data /state /sock /audit && \

@@ -85,6 +85,8 @@ modify workouts in Hevy or enable quarterly routine automation for this task.
 
 Google's current API setup and account eligibility must be checked for your account. Do not assume every device or historical record is available. Google also documents seven-day refresh-token expiry for external OAuth apps in Testing mode with these scopes. The agent should check publishing and verification requirements before promising unattended access. See [Google's token rules](https://developers.google.com/identity/protocols/oauth2#expiration).
 
+**Running the Docker deployment instead of a systemd host?** Use the optional `ghealth` compose service rather than installing the systemd timer — see [Docker deployment: Scheduled wearable collector](DOCKER.md#scheduled-wearable-collector) for setup, cadence and rollback. It still updates exactly one configured database.
+
 **Finished when:** an authorized import reaches the intended database and the imported dates and source labels are correct. A successful Google login alone is not a completed integration.
 
 ### Copy to your setup agent

@@ -132,6 +132,38 @@ collector/agent-only and the panel is read-only:
   exactly like every other panel-triggered writer — the panel never opens
   SQLite directly and the CSV is never written to disk.
 
+## Fork deployment: scheduled Google Health collector container (this fork)
+
+Owner decision, 2026-10-28: Christian Silva, operator of this fork and owner
+of this fork's deployment, instructed, about the Google Health collector:
+"Cadence: OK" (every 6 hours), "Weight: I will not always import body scan so
+importing from fitbit is ok." and "merge the code and etc. then proceed".
+This authorizes, in THIS fork only: a scheduled collector container
+(`ghealth`, profile-gated, never started by default) in the Docker medical
+stack that runs `deploy/ghealth-sync` in a new container mode
+(`HERMES_GHEALTH_MODE=container`) and writes validated data through the
+existing `import-google-health` command into ONE configured user's
+`health.db`.
+
+- no schema change;
+- the collector-only `import-google-health` and `collector-run-record`
+  commands stay OFF both panel and broker allowlists — unchanged
+  (`deploy/bridge_commands.py`; tests/test_bridge.py pins it, and the
+  behavior keeps passing without edits to that allowlist);
+- the `ghealth` container is the only new writer this decision introduces,
+  and it uses the same trust model as the existing root systemd collector:
+  the OAuth credentials live in a file mounted only into that one container
+  (`/creds/ghealth.json`, uid 1000, mode 0600, never committed — see
+  `deploy/docker/ghealth.json.example`) and that secret never reaches the
+  panel, the broker, or any agent; `deploy/ghealth-sync` never opens the
+  database itself — every write crosses `health.py`'s validated
+  `import-google-health`/`collector-run-record` commands, exactly as the
+  systemd path already does;
+- Fitbit-sourced weight lands in `body_metrics` with `source='fitbit'`, and
+  the existing dashboard/engine source order (manual > fitbit > BIA scan >
+  Hevy) already ranks it correctly against every other weight writer; no
+  ranking or display change was needed.
+
 ## First accepted product journey
 
 The first accepted journey is restricted to the fictional
