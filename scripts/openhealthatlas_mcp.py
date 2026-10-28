@@ -55,17 +55,27 @@ HEALTH_WRITE_COMMANDS = (
     "eat", "log-food", "log-set", "routine-set", "routine-remove",
     "routine-undo", "checkin", "day-rating", "write-note", "commitment-set",
     "commitment-list", "log-commitment", "schedule-set", "set-batch", "prep",
+    "log-body-composition",
 )
 NO_BROKER_REFUSAL = (
     "no broker configured; ingest is unavailable in this deployment"
 )
 HEALTH_WRITE_DESCRIPTION = (
     "Log a validated health record (food, training set, check-in, day rating, "
-    "note, commitment, routine or schedule) for one named user through the "
-    "deployment's audited write broker. Only the broker's whitelisted write "
-    "commands are accepted; refusals are returned unchanged."
+    "note, commitment, routine, schedule, or a multi-frequency BIA body "
+    "composition report) for one named user through the deployment's audited "
+    "write broker. Only the broker's whitelisted write commands are accepted; "
+    "refusals are returned unchanged. For log-body-composition, pass the full "
+    "report document (date, optional tested_at/device/subject/sex/age/height, "
+    "components[], segments[], impedance[], and the scalar obesity/score/"
+    "control fields) as a JSON string in stdin."
 )
 MAX_WRITE_STDIN_BYTES = 4096      # free text (write-note) stays small
+MAX_WRITE_JSON_STDIN_BYTES = 65536  # structured BIA report document
+STDIN_COMMAND_CAPS = {
+    "write-note": MAX_WRITE_STDIN_BYTES,
+    "log-body-composition": MAX_WRITE_JSON_STDIN_BYTES,
+}
 MAX_WRITE_POSITIONALS = 8
 MAX_WRITE_FLAG_VALUES = 20
 MAX_WRITE_ARGV = 40               # == deploy/hermes-bridge's MAX_ARGS
@@ -172,7 +182,7 @@ HEALTH_WRITE_SCHEMA = {
                            "log-set, routine-set, routine-remove, routine-undo, "
                            "checkin, day-rating, write-note, commitment-set, "
                            "commitment-list, log-commitment, schedule-set, "
-                           "set-batch, prep).",
+                           "set-batch, prep, log-body-composition).",
         },
         "positional": {
             "type": "array", "items": {"type": "string"}, "maxItems": MAX_WRITE_POSITIONALS,
@@ -187,8 +197,10 @@ HEALTH_WRITE_SCHEMA = {
                            "(e.g. {\"--portions\": 1}); store-true flags take JSON true.",
         },
         "stdin": {
-            "type": "string", "maxLength": MAX_WRITE_STDIN_BYTES,
-            "description": "Free text, accepted only for write-note (up to 4 KiB).",
+            "type": "string", "maxLength": MAX_WRITE_JSON_STDIN_BYTES,
+            "description": "Free text for write-note (up to 4 KiB), or the complete "
+                           "body composition report JSON document (as a string, up to "
+                           "64 KiB) for log-body-composition.",
         },
     },
     "required": ["user", "command"],
@@ -279,10 +291,11 @@ def build_health_write_request(arguments, write_commands, user: object):
     stdin = arguments.get("stdin")
     payload = {"subcmd": command, "args": argv, "user": user}
     if stdin is not None:
-        if command != "write-note":
-            return None, "stdin is only accepted for write-note"
-        if not isinstance(stdin, str) or len(stdin.encode("utf-8")) > MAX_WRITE_STDIN_BYTES:
-            return None, "stdin exceeds the 4 KiB write limit"
+        cap = STDIN_COMMAND_CAPS.get(command)
+        if cap is None:
+            return None, "stdin is only accepted for write-note or log-body-composition"
+        if not isinstance(stdin, str) or len(stdin.encode("utf-8")) > cap:
+            return None, f"stdin exceeds the {cap // 1024} KiB write limit"
         payload["stdin"] = stdin
     return payload, None
 

@@ -770,6 +770,77 @@ def test_body_extended_columns_empty_by_default(dash_client):
     assert rows == []
 
 
+def test_body_dedup_ranks_manual_over_bia_scan_over_hevy(tmp_path):
+    """§body-composition: the one-row-per-date dedup now has three source
+    tiers — a manual tape/entry must still win over a `bia-scan` mirror row,
+    which must still win over `hevy`, same contract as the pre-existing
+    manual-beats-hevy rule above."""
+    def seed(con):
+        con.execute(
+            "INSERT INTO body_metrics(date, weight_kg, source)"
+            " VALUES('" + LOCAL_TODAY + "', 90.0, 'hevy')")
+        con.execute(
+            "INSERT INTO body_metrics(date, weight_kg, source)"
+            " VALUES('" + LOCAL_TODAY + "', 84.4, 'bia-scan')")
+
+    rows = _care_client(tmp_path, seed).get("/api/dash/body?days=7").get_json()["rows"]
+    assert len(rows) == 1 and rows[0]["weight_kg"] == 84.4   # bia-scan beats hevy
+
+    def seed_with_manual(con):
+        seed(con)
+        con.execute(
+            "INSERT INTO body_metrics(date, weight_kg, source)"
+            " VALUES('" + LOCAL_TODAY + "', 79.5, 'manual')")
+
+    second = tmp_path / "second"
+    second.mkdir()
+    rows2 = _care_client(second, seed_with_manual).get("/api/dash/body?days=7").get_json()["rows"]
+    assert len(rows2) == 1 and rows2[0]["weight_kg"] == 79.5   # manual beats both
+
+
+# ── §body-composition ────────────────────────────────────────────────────────
+
+def test_body_composition_passes_engine_json_through(dash_client, monkeypatch):
+    from app import bridge
+    calls = []
+
+    def fake_run(*args, **kw):
+        calls.append(args)
+        return {"ok": True, "latest": {"date": LOCAL_TODAY, "bmi": 25.8}, "trend": []}
+
+    monkeypatch.setattr(bridge, "run", fake_run)
+    r = dash_client.get("/api/dash/body-composition")
+    assert r.status_code == 200
+    assert r.get_json()["latest"]["bmi"] == 25.8
+    assert calls[-1] == ("body-composition", "--days", "365")
+
+
+def test_body_composition_latest_flag(dash_client, monkeypatch):
+    from app import bridge
+    calls = []
+    monkeypatch.setattr(bridge, "run", lambda *a, **k: calls.append(a) or {"ok": True, "latest": None})
+    dash_client.get("/api/dash/body-composition?latest=1")
+    assert calls[-1] == ("body-composition", "--latest")
+
+
+def test_body_composition_days_validation(dash_client):
+    r = dash_client.get("/api/dash/body-composition?days=0")
+    assert r.status_code == 400
+    r2 = dash_client.get("/api/dash/body-composition?days=notanumber")
+    assert r2.status_code == 400
+
+
+def test_body_composition_surfaces_bridge_errors(dash_client, monkeypatch):
+    from app import bridge
+
+    def refuse(*args, **kw):
+        raise bridge.BridgeError("write bridge unavailable")
+
+    monkeypatch.setattr(bridge, "run", refuse)
+    r = dash_client.get("/api/dash/body-composition")
+    assert r.status_code == 502 and r.get_json()["ok"] is False
+
+
 def test_env_history_windowed(tmp_path):
     # task-52: /env grew an optional `days` window that ALSO returns
     # weather_history/air_history for the Data page's trend charts, while

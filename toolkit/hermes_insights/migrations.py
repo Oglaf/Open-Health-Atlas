@@ -19,7 +19,7 @@ import subprocess
 from .settings import CANON_TZ
 
 
-AUTONOMOUS_SCHEMA_VERSION = 7
+AUTONOMOUS_SCHEMA_VERSION = 8
 SCHEMA_CONTRACT = "hermes-autonomous-schema-v1"
 class SchemaError(RuntimeError):
     """A controlled schema validation or migration failure."""
@@ -860,6 +860,85 @@ LAB_CATALOG_V7_DDL = LAZY_TABLE_DDL["lab_catalog"].replace(
 MIGRATION_007_SQL = LAB_CATALOG_V7_DDL + "\n"
 
 
+# Multi-frequency BIA "body composition analysis report" (§body-composition,
+# fork owner decision 2026-10-27 — see docs/PRODUCT_AUTHORITY.md). Four
+# additive tables: one scan header + three per-scan child tables. Foreign
+# keys cascade on delete — every writer connection runs with
+# `PRAGMA foreign_keys=ON` (runtime.connect), so re-ingesting a report can
+# delete-then-replace a scan's children by deleting the parent row alone.
+BODY_COMPOSITION_TABLE_DDL = {
+    "body_composition_scans": """CREATE TABLE IF NOT EXISTS body_composition_scans (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  date TEXT NOT NULL,
+  tested_at TEXT NOT NULL DEFAULT '',
+  device TEXT NOT NULL DEFAULT '',
+  subject_label TEXT,
+  sex TEXT CHECK(sex IS NULL OR sex IN ('male','female','other')),
+  age_years INTEGER CHECK(age_years IS NULL OR age_years BETWEEN 0 AND 120),
+  height_cm REAL CHECK(height_cm IS NULL OR height_cm BETWEEN 50 AND 250),
+  bmi REAL,
+  body_fat_pct REAL,
+  body_score INTEGER,
+  target_weight_kg REAL,
+  weight_control_kg REAL,
+  fat_control_kg REAL,
+  muscle_control_kg REAL,
+  bmi_band TEXT CHECK(bmi_band IS NULL OR bmi_band IN ('Thin','Standard','High','Too High')),
+  body_fat_band TEXT CHECK(body_fat_band IS NULL OR body_fat_band IN ('Thin','Standard','High','Too High')),
+  obesity_degree_pct REAL,
+  obesity_degree_band TEXT CHECK(obesity_degree_band IS NULL OR obesity_degree_band IN ('Low','Normal','High')),
+  body_type TEXT CHECK(body_type IS NULL OR body_type IN
+    ('Athletes','Slightly obese','Muscle','Overweight','Muscular Slim','Slim',
+     'Marasmus','Thin','Invisible obesity','Obesity')),
+  visceral_fat_grade INTEGER,
+  bmr_kcal INTEGER,
+  fat_free_mass_kg REAL,
+  subcutaneous_fat_pct REAL,
+  smi_kg_m2 REAL,
+  body_age INTEGER,
+  whr REAL,
+  notes TEXT,
+  report_ref TEXT,
+  source TEXT NOT NULL DEFAULT 'manual',
+  ingested_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(date, tested_at, device)
+);""",
+    "body_composition_components": """CREATE TABLE IF NOT EXISTS body_composition_components (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  scan_id INTEGER NOT NULL REFERENCES body_composition_scans(id) ON DELETE CASCADE,
+  component TEXT NOT NULL CHECK(component IN
+    ('weight','body_fat','inorganic_salt','protein','body_water','muscle','skeletal_muscle')),
+  value_kg REAL NOT NULL,
+  ref_low REAL,
+  ref_high REAL,
+  pct_of_weight REAL,
+  evaluation TEXT CHECK(evaluation IS NULL OR evaluation IN ('Low','Standard','High')),
+  UNIQUE(scan_id, component)
+);""",
+    "body_composition_segments": """CREATE TABLE IF NOT EXISTS body_composition_segments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  scan_id INTEGER NOT NULL REFERENCES body_composition_scans(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK(kind IN ('fat','muscle')),
+  segment TEXT NOT NULL CHECK(segment IN ('left_arm','right_arm','trunk','left_leg','right_leg')),
+  mass_kg REAL NOT NULL,
+  pct_of_standard REAL,
+  evaluation TEXT CHECK(evaluation IS NULL OR evaluation IN ('Low','Standard','High')),
+  std_low_pct REAL,
+  std_high_pct REAL,
+  UNIQUE(scan_id, kind, segment)
+);""",
+    "body_composition_impedance": """CREATE TABLE IF NOT EXISTS body_composition_impedance (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  scan_id INTEGER NOT NULL REFERENCES body_composition_scans(id) ON DELETE CASCADE,
+  frequency_khz REAL NOT NULL,
+  segment TEXT NOT NULL CHECK(segment IN ('left_arm','right_arm','trunk','left_leg','right_leg')),
+  ohms REAL NOT NULL,
+  UNIQUE(scan_id, frequency_khz, segment)
+);""",
+}
+MIGRATION_008_SQL = "\n\n".join(BODY_COMPOSITION_TABLE_DDL.values()) + "\n"
+
+
 @dataclass(frozen=True)
 class Migration:
     version: int
@@ -880,6 +959,7 @@ MIGRATIONS = (
     Migration(5, "005_recipe_restock_state", MIGRATION_005_SQL),
     Migration(6, "006_provider_neutral_synthesis", MIGRATION_006_SQL),
     Migration(7, "007_lab_catalog_confidence_history", MIGRATION_007_SQL),
+    Migration(8, "008_body_composition_scans", MIGRATION_008_SQL),
 )
 MIGRATION_BY_VERSION = {m.version: m for m in MIGRATIONS}
 
@@ -1716,6 +1796,20 @@ def _apply_007(c: sqlite3.Connection) -> None:
     _validate_lab_catalog_dependencies(c)
 
 
+def _preflight_008(c: sqlite3.Connection) -> None:
+    for table, ddl in BODY_COMPOSITION_TABLE_DDL.items():
+        if _table_exists(c, table):
+            _validate_table(c, table, ddl)
+
+
+def _apply_008(c: sqlite3.Connection) -> None:
+    for table, ddl in BODY_COMPOSITION_TABLE_DDL.items():
+        if not _table_exists(c, table):
+            c.execute(ddl)
+    for table, ddl in BODY_COMPOSITION_TABLE_DDL.items():
+        _validate_table(c, table, ddl)
+
+
 def _preflight_003(c: sqlite3.Connection) -> None:
     _require_training_snapshot_sources(c)
     for table, ddl in PHASE3_TABLE_DDL.items():
@@ -2031,6 +2125,9 @@ def migrate(db_path: str, target: int, expected_from: int, code_version: str | N
             elif migration.version == 7:
                 _preflight_007(c)
                 _apply_007(c)
+            elif migration.version == 8:
+                _preflight_008(c)
+                _apply_008(c)
             c.execute(
                 "INSERT INTO schema_migrations(version,name,checksum_sha256,applied_at,code_version) VALUES(?,?,?,?,?)",
                 (migration.version, migration.name, migration.checksum,

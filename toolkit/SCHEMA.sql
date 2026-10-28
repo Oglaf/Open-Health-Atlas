@@ -24,6 +24,78 @@ CREATE TABLE air_quality (
 CREATE TABLE assessments (id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT, scale TEXT, part TEXT, score REAL, max_score REAL,
   subscores TEXT, notes TEXT, source TEXT DEFAULT 'manual', ingested_at TEXT DEFAULT (datetime('now')));
 
+-- Multi-frequency BIA "body composition analysis report" (§body-composition,
+-- Migration 008). One scan header + three per-scan child tables; children
+-- cascade on delete so re-ingesting a report can replace them by deleting
+-- the parent scan row alone.
+CREATE TABLE body_composition_scans (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  date TEXT NOT NULL,
+  tested_at TEXT NOT NULL DEFAULT '',
+  device TEXT NOT NULL DEFAULT '',
+  subject_label TEXT,
+  sex TEXT CHECK(sex IS NULL OR sex IN ('male','female','other')),
+  age_years INTEGER CHECK(age_years IS NULL OR age_years BETWEEN 0 AND 120),
+  height_cm REAL CHECK(height_cm IS NULL OR height_cm BETWEEN 50 AND 250),
+  bmi REAL,
+  body_fat_pct REAL,
+  body_score INTEGER,
+  target_weight_kg REAL,
+  weight_control_kg REAL,
+  fat_control_kg REAL,
+  muscle_control_kg REAL,
+  bmi_band TEXT CHECK(bmi_band IS NULL OR bmi_band IN ('Thin','Standard','High','Too High')),
+  body_fat_band TEXT CHECK(body_fat_band IS NULL OR body_fat_band IN ('Thin','Standard','High','Too High')),
+  obesity_degree_pct REAL,
+  obesity_degree_band TEXT CHECK(obesity_degree_band IS NULL OR obesity_degree_band IN ('Low','Normal','High')),
+  body_type TEXT CHECK(body_type IS NULL OR body_type IN
+    ('Athletes','Slightly obese','Muscle','Overweight','Muscular Slim','Slim',
+     'Marasmus','Thin','Invisible obesity','Obesity')),
+  visceral_fat_grade INTEGER,
+  bmr_kcal INTEGER,
+  fat_free_mass_kg REAL,
+  subcutaneous_fat_pct REAL,
+  smi_kg_m2 REAL,
+  body_age INTEGER,
+  whr REAL,
+  notes TEXT,
+  report_ref TEXT,
+  source TEXT NOT NULL DEFAULT 'manual',
+  ingested_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(date, tested_at, device));
+
+CREATE TABLE body_composition_components (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  scan_id INTEGER NOT NULL REFERENCES body_composition_scans(id) ON DELETE CASCADE,
+  component TEXT NOT NULL CHECK(component IN
+    ('weight','body_fat','inorganic_salt','protein','body_water','muscle','skeletal_muscle')),
+  value_kg REAL NOT NULL,
+  ref_low REAL,
+  ref_high REAL,
+  pct_of_weight REAL,
+  evaluation TEXT CHECK(evaluation IS NULL OR evaluation IN ('Low','Standard','High')),
+  UNIQUE(scan_id, component));
+
+CREATE TABLE body_composition_segments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  scan_id INTEGER NOT NULL REFERENCES body_composition_scans(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK(kind IN ('fat','muscle')),
+  segment TEXT NOT NULL CHECK(segment IN ('left_arm','right_arm','trunk','left_leg','right_leg')),
+  mass_kg REAL NOT NULL,
+  pct_of_standard REAL,
+  evaluation TEXT CHECK(evaluation IS NULL OR evaluation IN ('Low','Standard','High')),
+  std_low_pct REAL,
+  std_high_pct REAL,
+  UNIQUE(scan_id, kind, segment));
+
+CREATE TABLE body_composition_impedance (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  scan_id INTEGER NOT NULL REFERENCES body_composition_scans(id) ON DELETE CASCADE,
+  frequency_khz REAL NOT NULL,
+  segment TEXT NOT NULL CHECK(segment IN ('left_arm','right_arm','trunk','left_leg','right_leg')),
+  ohms REAL NOT NULL,
+  UNIQUE(scan_id, frequency_khz, segment));
+
 CREATE TABLE body_metrics (id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT, weight_kg REAL, waist_cm REAL, chest_cm REAL,
   arm_cm REAL, thigh_cm REAL, hip_cm REAL, neck_cm REAL, body_fat_pct REAL, photo_ref TEXT, notes TEXT,
   source TEXT DEFAULT 'manual', ingested_at TEXT DEFAULT (datetime('now')));

@@ -24,6 +24,7 @@ from .commands import (
     training, fitness, muscles, physio, daily_frames, recovery,
 )
 from .commands import labs as labs_commands, scores as scores_commands
+from .commands import body_composition as body_composition_commands
 from .commands.hevy import import_csv
 from .contracts import canonical_json
 from .commands import (
@@ -158,6 +159,11 @@ def build_parser(handlers, *, json_errors, output, meal_types, restock_actions, 
     s.add_argument("--commit", action="store_true"); s.add_argument("--confirm", action="append")
     s = add("labs"); s.add_argument("--days", type=int, default=None)
     s.add_argument("--test"); s.add_argument("--panel")
+    # §body-composition multi-frequency BIA report — content on stdin (see
+    # write-note above), no flags beyond what the broker's stdin rules need.
+    s = add("log-body-composition")
+    s = add("body-composition"); s.add_argument("--days", type=int, default=365)
+    s.add_argument("--latest", action="store_true")
     s = add("write-note"); s.add_argument("path")
     s = add("journal-capture"); s.add_argument("--date"); s.add_argument("--time")
     s = add("transcript-capture"); s.add_argument("audio")
@@ -625,6 +631,12 @@ def run(context, *, argv, output, parse_number,
     def labs(arguments):
         output(labs_commands.labs(context, arguments))
 
+    def log_body_composition_cmd(arguments):
+        output(body_composition_commands.log_body_composition(context, arguments, stdin=stdin))
+
+    def body_composition_cmd(arguments):
+        output(body_composition_commands.body_composition(context, arguments))
+
     def analysis_job_cmd(arguments):
         analysis_job_commands.analysis_job_cmd(
                 context, arguments, {
@@ -824,6 +836,8 @@ def run(context, *, argv, output, parse_number,
         "lab-capture": lab_capture,
         "lab-ingest": lab_ingest,
         "labs": labs,
+        "log-body-composition": log_body_composition_cmd,
+        "body-composition": body_composition_cmd,
         "log-set": log_set,
         "today": today_session,
         "last-session": last_session,

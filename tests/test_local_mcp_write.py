@@ -311,6 +311,64 @@ def test_health_write_happy_paths_land_in_each_users_own_database(broker_env, tm
                for record in map(json.loads, audit_lines))
 
 
+_FICTIONAL_BIA_REPORT = {
+    "date": "2026-06-29", "tested_at": "10:30", "device": "Relaxmedic",
+    "subject_label": "Fictional Agent", "sex": "male", "age_years": 35,
+    "height_cm": 175,
+    "components": [
+        {"component": "weight", "value_kg": 81.2, "ref_low": 57.9, "ref_high": 78.4,
+         "pct_of_weight": 100.0, "evaluation": "High"},
+        {"component": "body_fat", "value_kg": 21.3, "ref_low": 8.2, "ref_high": 16.3,
+         "pct_of_weight": 26.2, "evaluation": "High"},
+        {"component": "skeletal_muscle", "value_kg": 35.1, "ref_low": 29.2,
+         "ref_high": 37.0, "pct_of_weight": 43.2, "evaluation": "Standard"},
+    ],
+    "segments": [
+        {"kind": "fat", "segment": "trunk", "mass_kg": 12.4, "pct_of_standard": 240.0,
+         "evaluation": "High", "std_low_pct": 80, "std_high_pct": 160},
+    ],
+    "impedance": [
+        {"frequency_khz": 20, "segment": "trunk", "ohms": 31.0},
+    ],
+    "bmi": 26.4, "body_fat_pct": 26.2, "body_score": 71,
+    "visceral_fat_grade": 9, "bmr_kcal": 1720, "body_age": 34, "whr": 1.0,
+}
+
+
+def test_health_write_logs_a_body_composition_scan_via_the_broker(broker_env, tmp_path):
+    """An agent that read a BIA report (e.g. a photo of the device printout)
+    must be able to write the whole scan through health_write in one call —
+    docs/PRODUCT_AUTHORITY.md "Fork deployment: body composition analysis
+    report"."""
+    alice_db = broker_env["dbs"]["alice"]
+    before = _digest(alice_db)
+
+    async def exercise():
+        async with stdio_client(_mcp_parameters(
+                tmp_path, broker_env["users_root"],
+                bridge_socket=broker_env["sock"])) as (reader, writer):
+            async with mcp.ClientSession(reader, writer, read_timeout_seconds=timedelta(seconds=30)) as session:
+                await session.initialize()
+                result, error = await _call(session, "health_write", _write(
+                    "log-body-composition", "alice",
+                    stdin=json.dumps(_FICTIONAL_BIA_REPORT)))
+                assert not error and result["ok"] is True, json.dumps(result)
+
+    asyncio.run(exercise())
+    assert _digest(alice_db) != before
+
+    module = _load_mcp_module()
+    read_back = module["broker_exchange"](broker_env["sock"], {
+        "subcmd": "body-composition", "args": ["--latest"], "user": "alice",
+    })
+    assert read_back["ok"] is True
+    payload = json.loads(read_back["stdout"])
+    assert payload["latest"]["date"] == "2026-06-29"
+    assert payload["latest"]["bmi"] == 26.4
+    weight = next(c for c in payload["latest"]["components"] if c["component"] == "weight")
+    assert weight["value_kg"] == 81.2
+
+
 def test_health_write_respects_the_panel_active_gate_and_unknown_users(broker_env, tmp_path):
     users_root = broker_env["users_root"]
     _make_user_db(tmp_path / "owner-health.db", "2026-06-30")
@@ -433,6 +491,7 @@ def test_exposure_subset_pin_and_derived_flag_sets(tmp_path):
         "eat", "log-food", "log-set", "routine-set", "routine-remove",
         "routine-undo", "checkin", "day-rating", "write-note", "commitment-set",
         "commitment-list", "log-commitment", "schedule-set", "set-batch", "prep",
+        "log-body-composition",
     )
     # Every exposed command exists in the broker's shared declaration and its
     # MCP flag set is exactly the broker's (derived, in sync).
@@ -457,4 +516,4 @@ def test_note_stdin_cap_refused_clientside(tmp_path):
     build, error = mc["build_health_write_request"](
         {"user": "alice", "command": "checkin", "positional": ["mood", "4"],
          "stdin": "smuggled"}, write_commands, "alice")
-    assert build is None and error == "stdin is only accepted for write-note"
+    assert build is None and error == "stdin is only accepted for write-note or log-body-composition"

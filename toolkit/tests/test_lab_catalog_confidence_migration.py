@@ -145,7 +145,12 @@ def test_fresh_latest_schema_can_intentionally_stop_before_seven(tmp_path, targe
     conn = connection(path)
     assert rows_by_table(conn)['lab_catalog'] == before['lab_catalog']
     conn.close()
-    assert m.schema_status(str(path))['status'] == 'up_to_date'
+    # Migration 007 itself is fully caught up; later additive migrations
+    # (e.g. Migration 008's §body-composition tables) are a separate,
+    # unrelated pending tail that this lab_catalog-focused test doesn't drive.
+    status_after = m.schema_status(str(path))
+    assert status_after['current_version'] == 7
+    assert [item['version'] for item in status_after['pending']] == list(range(8, m.AUTONOMOUS_SCHEMA_VERSION + 1))
 
 
 @pytest.mark.parametrize('variant', ['unknown_hash', 'wrong_name', 'legacy_with_current', 'legacy_with_latest', 'canonical_with_legacy', 'v7_with_current', 'v7_with_legacy', 'canonical_literal_case', 'canonical_default_case', 'v7_literal_case'])

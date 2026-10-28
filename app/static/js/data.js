@@ -9,7 +9,7 @@
    calling the shared builder. */
 (function () {
   if (typeof echarts === "undefined" || !window.HermesCharts) return;
-  const { localISO, isoDaysAgo, fetchJSON, pal, tip, barsOpt } = window.HermesCharts;
+  const { localISO, isoDaysAgo, fetchJSON, pal, tip, barsOpt, lineOpt } = window.HermesCharts;
 
   const state = { days: 90, source: "all", metrics: [], body: [], subjective: [], safety: null, env: null,
     sleepLog: [], workouts: [], hevyVolume: [], water: [] };
@@ -504,6 +504,158 @@
     }
   }
 
+  /* §body-composition (fork owner decision 2026-10-27): the panel only
+     renders health.py's `body-composition` read-model; it computes no
+     numbers itself. Independent of the page's day-range dropdown — scans
+     are episodic (like labs), so this always asks for a generous fixed
+     window rather than tracking Week/Month/Quarter/Year/All. */
+  const BC_TREND_DAYS = 3650;
+  const csrf = document.querySelector('meta[name="csrf-token"]').content;
+  async function postJSON(url, body) {
+    const res = await fetch(url, { method: "POST", credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-CSRFToken": csrf }, body: JSON.stringify(body) });
+    let data = {};
+    try { data = await res.json(); } catch (_) { /* non-JSON error body */ }
+    if (!res.ok || data.ok === false) throw new Error(data.error || ("HTTP " + res.status));
+    return data;
+  }
+
+  function bcFlag(evaluation) {
+    if (!evaluation) return '<span class="muted micro">—</span>';
+    return `<span class="flag ${evaluation === "Standard" ? "in" : "out"}">${escapeHtml(evaluation)}</span>`;
+  }
+  function bcRef(lo, hi) {
+    if (lo == null && hi == null) return "—";
+    if (lo == null) return "< " + hi;
+    if (hi == null) return "> " + lo;
+    return lo + "–" + hi;
+  }
+  const BC_COMPONENT_LABEL = {
+    weight: "Weight", body_fat: "Body fat", inorganic_salt: "Inorganic salt",
+    protein: "Protein", body_water: "Body water", muscle: "Muscle",
+    skeletal_muscle: "Skeletal muscle",
+  };
+  const BC_SEGMENT_LABEL = {
+    left_arm: "Left arm", right_arm: "Right arm", trunk: "Trunk",
+    left_leg: "Left leg", right_leg: "Right leg",
+  };
+
+  function bcComponentsRows(components) {
+    return components.map((c) => `<tr>
+      <td class="strong">${escapeHtml(BC_COMPONENT_LABEL[c.component] || c.component)}</td>
+      <td class="num">${c.value_kg} <span class="muted micro">kg</span></td>
+      <td class="muted">${escapeHtml(bcRef(c.ref_low, c.ref_high))}</td>
+      <td class="muted">${c.pct_of_weight != null ? c.pct_of_weight + "%" : "—"}</td>
+      <td>${bcFlag(c.evaluation)}</td>
+    </tr>`).join("");
+  }
+  function bcSegmentRows(segments) {
+    return segments.map((s) => `<tr>
+      <td class="strong">${escapeHtml(BC_SEGMENT_LABEL[s.segment] || s.segment)}</td>
+      <td class="num">${s.mass_kg} <span class="muted micro">kg</span></td>
+      <td class="muted">${s.pct_of_standard != null ? s.pct_of_standard + "%" : "—"}</td>
+      <td>${bcFlag(s.evaluation)}</td>
+    </tr>`).join("");
+  }
+  function bcImpedanceRows(rows) {
+    const byFreq = {};
+    rows.forEach((r) => { (byFreq[r.frequency_khz] = byFreq[r.frequency_khz] || {})[r.segment] = r.ohms; });
+    return Object.keys(byFreq).sort((a, b) => a - b).map((freq) => {
+      const row = byFreq[freq];
+      const cell = (seg) => (row[seg] != null ? row[seg] : "—");
+      return `<tr><td class="strong">${escapeHtml(freq)} kHz</td>
+        <td class="num">${cell("right_arm")}</td><td class="num">${cell("left_arm")}</td>
+        <td class="num">${cell("trunk")}</td><td class="num">${cell("right_leg")}</td>
+        <td class="num">${cell("left_leg")}</td></tr>`;
+    }).join("");
+  }
+
+  const BC_TREND_CHARTS = ["ch-bc-weight", "ch-bc-bodyfat", "ch-bc-muscle", "ch-bc-visceral"];
+
+  function bodyCompositionRender(data) {
+    const emptyEl = document.getElementById("bc-empty");
+    const bodyEl = document.getElementById("bc-body");
+    if (!data || data.insufficient_data) {
+      emptyEl.hidden = false; bodyEl.hidden = true;
+      BC_TREND_CHARTS.forEach((id) => empty(id, "No scan yet"));
+      return;
+    }
+    emptyEl.hidden = true; bodyEl.hidden = false;
+    const s = data.latest;
+    document.getElementById("bc-meta").textContent =
+      [s.date, s.tested_at, s.device, s.age_years ? s.age_years + "y" : null,
+       s.height_cm ? s.height_cm + " cm" : null].filter(Boolean).join(" · ");
+    document.getElementById("bc-score").textContent = s.body_score != null ? s.body_score : "—";
+    document.getElementById("bc-bmi").textContent =
+      s.bmi != null ? `BMI ${s.bmi}${s.bmi_band ? " · " + s.bmi_band : ""}` : "BMI —";
+    document.getElementById("bc-bodytype").textContent = s.body_type || "—";
+    document.getElementById("bc-components").innerHTML = bcComponentsRows(s.components || []);
+    document.getElementById("bc-fat").innerHTML = bcSegmentRows((s.segments && s.segments.fat) || []);
+    document.getElementById("bc-muscle").innerHTML = bcSegmentRows((s.segments && s.segments.muscle) || []);
+    document.getElementById("bc-impedance").innerHTML = bcImpedanceRows(s.impedance || []);
+    document.getElementById("bc-obesity").textContent = s.obesity_degree_pct != null
+      ? `${s.obesity_degree_pct}%${s.obesity_degree_band ? " · " + s.obesity_degree_band : ""}` : "—";
+    document.getElementById("bc-target").textContent = s.target_weight_kg != null ? s.target_weight_kg + " kg" : "—";
+    document.getElementById("bc-control").textContent =
+      [s.weight_control_kg, s.fat_control_kg, s.muscle_control_kg].every((v) => v == null) ? "—"
+        : `${s.weight_control_kg ?? "—"} / ${s.fat_control_kg ?? "—"} / ${s.muscle_control_kg ?? "—"} kg`;
+    document.getElementById("bc-visceral").textContent = s.visceral_fat_grade != null ? s.visceral_fat_grade : "—";
+    document.getElementById("bc-bmr").textContent = s.bmr_kcal != null ? s.bmr_kcal + " kcal" : "—";
+    document.getElementById("bc-otherfat").textContent =
+      [s.fat_free_mass_kg != null ? s.fat_free_mass_kg + " kg" : "—",
+       s.subcutaneous_fat_pct != null ? s.subcutaneous_fat_pct + "%" : "—"].join(" / ");
+    document.getElementById("bc-othersmi").textContent =
+      [s.smi_kg_m2 ?? "—", s.body_age ?? "—", s.whr ?? "—"].join(" / ");
+
+    const trend = data.trend || [];
+    if (!trend.length) {
+      BC_TREND_CHARTS.forEach((id) => empty(id, "Not enough scans in this window yet"));
+      return;
+    }
+    const dates = trend.map((t) => t.date);
+    const P = pal();
+    chart("ch-bc-weight").setOption(lineOpt(dates, [
+      { n: "Weight", d: trend.map((t) => t.weight_kg), c: P.accent },
+      { n: "Fat mass", d: trend.map((t) => t.fat_mass_kg), c: P.warn },
+    ]));
+    chart("ch-bc-bodyfat").setOption(lineOpt(dates, [
+      { n: "Body fat %", d: trend.map((t) => t.body_fat_pct), c: P.bad },
+    ]));
+    chart("ch-bc-muscle").setOption(lineOpt(dates, [
+      { n: "Skeletal muscle", d: trend.map((t) => t.skeletal_muscle_kg), c: P.good },
+    ]));
+    chart("ch-bc-visceral").setOption(lineOpt(dates, [
+      { n: "Visceral fat grade", d: trend.map((t) => t.visceral_fat_grade), c: P.warn },
+    ]));
+  }
+
+  async function loadBodyComposition() {
+    try {
+      bodyCompositionRender(await fetchJSON(`/api/dash/body-composition?days=${BC_TREND_DAYS}`));
+    } catch (e) {
+      const emptyEl = document.getElementById("bc-empty");
+      emptyEl.hidden = false; emptyEl.textContent = "Could not load body composition: " + e.message;
+      document.getElementById("bc-body").hidden = true;
+      BC_TREND_CHARTS.forEach((id) => empty(id, e.message));
+    }
+  }
+
+  document.getElementById("bc-submit").addEventListener("click", async () => {
+    const msg = document.getElementById("bc-submit-msg");
+    const raw = document.getElementById("bc-paste").value.trim();
+    msg.textContent = "";
+    let body;
+    try { body = JSON.parse(raw); } catch (e) { msg.textContent = "Invalid JSON: " + e.message; return; }
+    try {
+      await postJSON("/log/body-composition", body);
+      msg.textContent = "Logged.";
+      document.getElementById("bc-paste").value = "";
+      loadBodyComposition();
+    } catch (e) {
+      msg.textContent = e.message;
+    }
+  });
+
   const FEED_LABEL = {
     "bridge.day-rating": "Day rating", "bridge.log": "Logged", "bridge.eat": "Ate a portion",
     "bridge.log-food": "Logged food", "bridge.log-set": "Logged set",
@@ -599,6 +751,7 @@
     if (subj.status === "rejected") { empty("ch-mood", subj.reason.message); empty("ch-dayrating", subj.reason.message); }
     if (safety.status === "rejected") empty("ch-safety", safety.reason.message);
     if (water.status === "rejected") empty("ch-water", water.reason.message);
+    loadBodyComposition();
   }
 
   // task-50 item 3: standard .dd widget (ui-common owns the .on state) —

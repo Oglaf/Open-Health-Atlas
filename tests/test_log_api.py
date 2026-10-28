@@ -12,9 +12,11 @@ from app.panel_db import get_db
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
     calls = []
+    stdins = []
 
     def fake_run(subcmd, *args, **kw):
         calls.append((subcmd, list(args)))
+        stdins.append(kw.get("stdin"))
         return {"ok": True}
 
     monkeypatch.setattr(bridge, "run", fake_run)
@@ -27,6 +29,7 @@ def client(tmp_path, monkeypatch):
         token = auth_mod.create_session()
     c.set_cookie(auth_mod.SESSION_COOKIE, token)
     c.calls = calls
+    c.stdins = stdins
     return c
 
 
@@ -123,6 +126,34 @@ def test_body(client):
 def test_water(client):
     client.post("/api/log/water", json={"water_ml": 1500})
     assert client.calls[-1] == ("log", ["intake", "water_ml=1500.0"])
+
+
+def test_body_composition_forwards_the_document_verbatim_as_stdin(client):
+    """§body-composition: the route shapes no fields itself — health.py owns
+    every validation; the panel only carries the document to the writer."""
+    report = {"date": "2026-02-10", "components": [
+        {"component": "weight", "value_kg": 84.4},
+    ]}
+    r = client.post("/api/log/body-composition", json=report)
+    assert r.status_code == 200 and r.get_json()["ok"] is True
+    assert client.calls[-1] == ("log-body-composition", [])
+    assert json.loads(client.stdins[-1]) == report
+
+
+def test_body_composition_rejects_non_object_body(client):
+    r = client.post("/api/log/body-composition", json=[1, 2, 3])
+    assert r.status_code == 400
+    assert client.calls == []
+
+
+def test_body_composition_surfaces_bridge_errors(client, monkeypatch):
+    def refuse(subcmd, *args, **kw):
+        raise bridge.BridgeError("date is required")
+
+    monkeypatch.setattr(bridge, "run", refuse)
+    r = client.post("/api/log/body-composition", json={"bogus": True})
+    assert r.status_code == 400
+    assert r.get_json() == {"ok": False, "error": "date is required"}
 
 
 def test_bridge_error_becomes_400(client, monkeypatch):

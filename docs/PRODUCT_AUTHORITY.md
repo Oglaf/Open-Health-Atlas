@@ -69,6 +69,35 @@ widened: no new model or interpretation runtime, no schema change, and the
 standalone MCP remains read-only in every mode where no broker socket is
 configured.
 
+## Fork deployment: body composition analysis report (this fork)
+
+Owner decision, 2026-10-27: Christian Silva, operator of this fork and owner
+of this fork's deployment, approved in his own words: "I want to improve
+open-health-atlas to support all information from this report" (a
+multi-frequency BIA "body composition analysis report", Relaxmedic-style —
+weight/body-fat/muscle/water/protein/mineral breakdown, segmental fat and
+muscle balance, bioelectrical impedance per frequency and segment, obesity
+and body-type assessment, weight control targets, and other indicators such
+as visceral fat grade, BMR, SMI, body age and WHR). This authorizes, in THIS
+fork only:
+
+- an additive schema change (Migration 008: `body_composition_scans`,
+  `body_composition_components`, `body_composition_segments`,
+  `body_composition_impedance`) — no existing table is altered or dropped;
+- a validated writer (`log-body-composition`) that goes only through the
+  existing validated CLI/broker path (closed-schema JSON on stdin, the same
+  transaction/commit discipline as every other toolkit command), exposed to
+  the panel and to MCP `health_write` exactly like the writers approved in
+  "Fork deployment: broker-mediated MCP ingest" above;
+- a read (`body-composition`) and a panel display section, built the same
+  way as every other read-only dashboard card.
+
+Nothing else is widened: no model or interpretation runtime is added, no
+diagnostic or clinical claim is attached to the stored bands/evaluations
+(they are the device's own printed labels, stored verbatim), and the
+standalone MCP stays read-only in every mode where no broker is configured —
+same boundary as the existing broker-mediated ingest decision.
+
 ## First accepted product journey
 
 The first accepted journey is restricted to the fictional

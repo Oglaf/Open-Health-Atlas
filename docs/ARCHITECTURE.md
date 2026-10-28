@@ -78,7 +78,7 @@ defines the separate responsibilities.
 | File and provider imports | `toolkit/hermes_insights/commands/`, `importers/` | Import transactions, source normalization and catalog validation |
 | Daily workflows | `toolkit/hermes_insights/commands/`, `capture_contracts.py`, `followthrough.py`, `schedules.py`, `vault_notes.py` | Governed capture, commitments, schedules, notes and collector coordination |
 | Nutrition and food | `toolkit/hermes_insights/nutrition.py`, `food.py`, `score_contracts.py`, `commands/` | Profile targets, nutrition coverage, recipe scaling, food capture and freezer stock |
-| Training and movement | `toolkit/hermes_insights/fitness.py`, `muscles.py`, `muscle_figure.py`, `figure_contracts.py`, `physio.py`, `body_measurements.py`, `commands/` | Training edits, fitness reports, muscle volume and figure lenses |
+| Training and movement | `toolkit/hermes_insights/fitness.py`, `muscles.py`, `muscle_figure.py`, `figure_contracts.py`, `physio.py`, `body_measurements.py`, `body_composition.py`, `commands/` | Training edits, fitness reports, muscle volume and figure lenses, and the validated multi-frequency BIA body-composition writer/reader (this fork only; §body-composition) |
 | Daily frames, scores, Recovery and labs | `toolkit/hermes_insights/daily_frames.py`, `scores.py`, `recovery.py`, `labs.py`, `commands/` | Legacy daily reports, dashboard scores, verified Recovery and laboratory workflows |
 | Shared analytical runtime | `toolkit/hermes_insights/runtime.py`, `catalogs.py`, `calculations.py` | Database/clock context, configured catalogs and shared formulas used directly by CLI and Hermes tools |
 | Database contracts | `toolkit/SCHEMA.sql`, `app/panel_db.py` | Empty health and panel schemas, append protections, indexes, views |
@@ -380,13 +380,16 @@ defines the complete application, fictional journey and actual MCP suites.
 
 ## Data ownership and writes
 
-`health.db` is the canonical health record. The baseline schema has 68 tables,
+`health.db` is the canonical health record. The baseline schema has 72 tables,
 two views, 16 indexes, and ten append-only triggers. Migration v4 adds the
 latest provenance, event, feature, analysis, hypothesis, synthesis, trigger,
 outbox, and notification structures; migration v5 adds persistent recipe
-restock state, v6 makes synthesis provider-neutral, and v7 preserves historical lab-confirmation
-labels alongside the current label. Initialization inserts no user or health observations; it seeds
-only the bundled cited exercise-to-subregion configuration.
+restock state, v6 makes synthesis provider-neutral, v7 preserves historical lab-confirmation
+labels alongside the current label, and v8 adds the four `body_composition_*`
+tables for the multi-frequency BIA "body composition analysis report"
+(§body-composition; this fork only — see PRODUCT_AUTHORITY.md). Initialization
+inserts no user or health observations; it seeds only the bundled cited
+exercise-to-subregion configuration.
 
 `panel.db` is an application-state database with seven tables and five indexes.
 It is not a second health-data authority. A clean initialization contains no

@@ -25,6 +25,7 @@ _FIXTURE_LANE_SCHEMA = {
     "accepted-v5": 5,
     "development-v6": 6,
     "development-v7": 7,
+    "development-v8": 8,
 }
 _FINGERPRINT_SCOPE = [
     "calculation_relevant_projection",
@@ -122,7 +123,7 @@ def _public_readiness_evidence(result, *, expected_schema_version=None):
         or projected_integrity["status"] != "verified"
         or projected_integrity["scope"]
         != "current_snapshot_integrity_and_reproducibility"
-        or projected_integrity["schema_version"] not in {5, 6, 7}
+        or projected_integrity["schema_version"] not in {5, 6, 7, 8}
         or (
             expected_schema_version is not None
             and projected_integrity["schema_version"] != expected_schema_version

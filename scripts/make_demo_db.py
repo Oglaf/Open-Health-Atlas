@@ -60,6 +60,77 @@ con.close()
 demo_code_version = hashlib.sha1(b"hermes-open-source-demo-v1").hexdigest()
 migrate(str(DB), AUTONOMOUS_SCHEMA_VERSION, 0, demo_code_version)
 con = sqlite3.connect(DB)
+con.execute("PRAGMA foreign_keys=ON")
+
+
+def seed_body_composition_scan(connection, scan_date, *, weight_kg, body_fat_pct,
+                                skeletal_muscle_kg, visceral_fat_grade, body_score):
+    """§body-composition (Migration 008): one fictional multi-frequency BIA
+    scan — invented numbers for a fictional "Demo User", not any real report.
+    Direct inserts mirror the weekly body_metrics seeding above rather than
+    shelling out to the validated CLI writer (demo generation stays a single
+    fast script pass, same convention as every other table here)."""
+    connection.execute(
+        "INSERT INTO body_composition_scans(date, tested_at, device, subject_label, "
+        "sex, age_years, height_cm, bmi, body_fat_pct, body_score, target_weight_kg, "
+        "weight_control_kg, fat_control_kg, muscle_control_kg, bmi_band, body_fat_band, "
+        "obesity_degree_pct, obesity_degree_band, body_type, visceral_fat_grade, "
+        "bmr_kcal, fat_free_mass_kg, subcutaneous_fat_pct, smi_kg_m2, body_age, whr, "
+        "source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (scan_date, "07:30", "FictionalScale 9000", "Demo User", "female", 34, 168,
+         round(weight_kg / (1.68 ** 2), 1), body_fat_pct, body_score, 62.0,
+         round(weight_kg - 62.0, 1), round(weight_kg - 62.0, 1), 0.0,
+         "Standard" if weight_kg < 68 else "High",
+         "Standard" if body_fat_pct < 28 else "High",
+         round(100 * weight_kg / 62.0), "Normal", "Slightly obese",
+         visceral_fat_grade, 1420, round(weight_kg * (1 - body_fat_pct / 100), 1),
+         18.5, 6.8, 36, 0.84, FICTIONAL_SOURCE),
+    )
+    scan_id = connection.execute("SELECT last_insert_rowid()").fetchone()[0]
+    components = (
+        ("weight", weight_kg, 46.0, 62.0, 100.0),
+        ("body_fat", round(weight_kg * body_fat_pct / 100, 1), 12.0, 24.0,
+         body_fat_pct),
+        ("inorganic_salt", 2.9, 2.5, 3.3, 4.5),
+        ("protein", 9.2, 8.0, 10.5, 13.6),
+        ("body_water", 33.8, 30.0, 37.0, 49.8),
+        ("muscle", 42.4, 37.0, 47.0, 62.4),
+        ("skeletal_muscle", skeletal_muscle_kg, 22.0, 27.0, 37.9),
+    )
+    connection.executemany(
+        "INSERT INTO body_composition_components(scan_id, component, value_kg, "
+        "ref_low, ref_high, pct_of_weight) VALUES(?,?,?,?,?,?)",
+        [(scan_id, *row) for row in components],
+    )
+    segments = (
+        ("fat", "left_arm", 1.1, 260.0, "High", 80, 160),
+        ("fat", "right_arm", 1.1, 258.0, "High", 80, 160),
+        ("fat", "trunk", 9.4, 300.0, "High", 80, 160),
+        ("fat", "left_leg", 2.6, 220.0, "High", 80, 160),
+        ("fat", "right_leg", 2.6, 218.0, "High", 80, 160),
+        ("muscle", "left_arm", 2.1, 94.0, "Standard", 80, 160),
+        ("muscle", "right_arm", 2.1, 95.0, "Standard", 80, 160),
+        ("muscle", "trunk", 18.8, 91.0, "Standard", 90, 110),
+        ("muscle", "left_leg", 6.9, 97.0, "Standard", 90, 110),
+        ("muscle", "right_leg", 6.9, 98.0, "Standard", 90, 110),
+    )
+    connection.executemany(
+        "INSERT INTO body_composition_segments(scan_id, kind, segment, mass_kg, "
+        "pct_of_standard, evaluation, std_low_pct, std_high_pct) VALUES(?,?,?,?,?,?,?,?)",
+        [(scan_id, *row) for row in segments],
+    )
+    impedance = (
+        (20, "right_arm", 360.2), (20, "left_arm", 368.9), (20, "trunk", 27.4),
+        (20, "right_leg", 290.1), (20, "left_leg", 286.5),
+        (100, "right_arm", 320.5), (100, "left_arm", 327.8), (100, "trunk", 25.6),
+        (100, "right_leg", 254.0), (100, "left_leg", 250.9),
+    )
+    connection.executemany(
+        "INSERT INTO body_composition_impedance(scan_id, frequency_khz, segment, ohms) "
+        "VALUES(?,?,?,?)",
+        [(scan_id, *row) for row in impedance],
+    )
+
 
 for i in range(DAYS, -1, -1):
     current = today - timedelta(days=i)
@@ -191,6 +262,18 @@ for i in range(DAYS, -1, -1):
                 round(18.0 - 0.5 * drift, 1),
                 "fictional weekly measurements", FICTIONAL_SOURCE,
             ),
+        )
+    # Two fictional BIA scans (§body-composition, Migration 008) spaced well
+    # apart so the Data page's trend charts have more than one point.
+    if i == 100:
+        seed_body_composition_scan(
+            con, d, weight_kg=71.5, body_fat_pct=30.5,
+            skeletal_muscle_kg=24.0, visceral_fat_grade=8, body_score=52,
+        )
+    if i == 10:
+        seed_body_composition_scan(
+            con, d, weight_kg=68.9, body_fat_pct=27.8,
+            skeletal_muscle_kg=24.8, visceral_fat_grade=7, body_score=58,
         )
 
 # ---- training layer (routines / schedule / muscle map / logged sets) ----
@@ -687,7 +770,7 @@ seeded = subprocess.run(
 )
 seeded_rows = json.loads(seeded.stdout)["seeded_rows"]
 COLLECTED_DOMAIN_TABLES = (
-    "air_quality", "assessments", "body_metrics", "daily_metrics",
+    "air_quality", "assessments", "body_composition_scans", "body_metrics", "daily_metrics",
     "event_exposures", "exercise_trial_log", "fitness_tests", "habits_log",
     "hevy_sets", "intake", "labs", "meal_inventory", "meds_log",
     "nutrient_daily", "nutrition_log", "pain_log", "recipes",

@@ -23,7 +23,7 @@ ACTIVITY_WRITES = (
     "day-rating", "log", "log-set", "log-food", "eat", "prep", "set-batch",
     "commitment-set", "log-commitment", "checkin", "routine-set",
     "routine-remove", "routine-undo", "schedule-set", "write-note",
-    "hypothesis-promote", "hermes-model-set",
+    "hypothesis-promote", "hermes-model-set", "log-body-composition",
 )
 
 DAY_RATINGS = {"green", "yellow", "red"}
@@ -162,6 +162,22 @@ def body_metrics():
     if len(args) == 2:
         return jsonify(ok=False, error="nothing to log"), 400
     return _run(*args)
+
+
+@bp.post("/body-composition")
+def body_composition():
+    """Accept one BIA report JSON document (§body-composition, fork owner
+    decision 2026-10-27) and forward it verbatim to health.py's validated
+    writer via stdin — the same contract the CLI and MCP health_write use.
+    health.py owns every validation; this route only shapes the transport."""
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify(ok=False, error="body must be a JSON object"), 400
+    try:
+        return jsonify(ok=True, result=bridge.run(
+            "log-body-composition", stdin=json.dumps(body)))
+    except bridge.BridgeError as exc:
+        return jsonify(ok=False, error=str(exc)), 400
 
 
 @bp.post("/water")

@@ -69,6 +69,11 @@ COMMAND_FLAGS = {
     # §labs bloodwork — read-only view feed (capture, OCR ingestion and the
     # cited catalog seed are collector-only, NOT here)
     "labs":                {"--days", "--test", "--panel"},
+    # §body-composition multi-frequency BIA report (fork owner decision
+    # 2026-10-27, docs/PRODUCT_AUTHORITY.md): validated write (JSON on
+    # stdin, no flags) + a bounded read.
+    "log-body-composition": set(),
+    "body-composition":     {"--days", "--latest"},
     # T44 targets engine — read-only compute, zero flags (profile-set /
     # phase-set / nutrition-target-set are owner config, NOT here)
     "nutrition-targets":   set(),
@@ -145,7 +150,7 @@ CLIENT_FLAG_CHECKS = {
 }
 
 # store_true flags consume no following value; other allowed flags consume one.
-NO_VALUE_FLAGS = {"--all", "--include-provenance"}
+NO_VALUE_FLAGS = {"--all", "--include-provenance", "--latest"}
 
 # Comprehensive fictional reads on the capped one-CPU host took 449s for
 # all-mode Explorer and 443s for full pairwise evidence replay. The finite 570s

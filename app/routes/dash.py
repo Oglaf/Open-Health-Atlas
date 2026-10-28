@@ -127,12 +127,14 @@ def body():
     where, params = _date_filter(rng)
     # ONE row per date: since the Hevy body sync (§3f) landed, manual and
     # hevy rows can coexist on a day — two same-x points would zigzag the
-    # chart. Deterministic pick: manual beats hevy (a manual tape is the
-    # owner's correction), then the day's latest row. Same provenance rule
-    # as the daily_metrics merge, applied at read time. The panel is
-    # read-only and cannot migrate a legacy table, so the source tie-break
-    # only applies once the column exists.
-    src = ("CASE WHEN COALESCE(source,'manual')='hevy' THEN 1 ELSE 0 END, "
+    # chart. Deterministic pick: manual beats a BIA-scan mirror row
+    # (§body-composition) beats hevy, then the day's latest row — a manual
+    # tape/entry is always the owner's correction and must never be shadowed.
+    # Same provenance rule as the daily_metrics merge, applied at read time.
+    # The panel is read-only and cannot migrate a legacy table, so the source
+    # tie-break only applies once the column exists.
+    src = ("CASE WHEN COALESCE(source,'manual')='hevy' THEN 2 "
+           "WHEN source='bia-scan' THEN 1 ELSE 0 END, "
            if "source" in db_read.columns("body_metrics") else "")
     # task-52: added the tape-measurement columns + body_fat_pct for the Data
     # page's "Measurements" and "Body fat %" cards — same one-row-per-date
@@ -149,6 +151,24 @@ def body():
         params,
     )
     return jsonify(rows=rows)
+
+
+@bp.get("/body-composition")
+def body_composition():
+    """BIA scan read-model (§body-composition, fork owner decision
+    2026-10-27): health.py computes the full nested latest-scan + trend
+    payload; the panel only renders it. ?latest=1 skips the trend series."""
+    if request.args.get("latest") in ("1", "true"):
+        args = ["body-composition", "--latest"]
+    else:
+        days = request.args.get("days", "365")
+        if not days.isdigit() or not 1 <= int(days) <= 3650:
+            return jsonify(ok=False, error="days must be a whole number 1-3650"), 400
+        args = ["body-composition", "--days", days]
+    try:
+        return jsonify(bridge.run(*args))
+    except bridge.BridgeError as exc:
+        return jsonify(ok=False, error=str(exc)), 502
 
 
 @bp.get("/subjective")

@@ -174,6 +174,97 @@
     <div id="ch-measurements" class="h300"></div>
   </div>
 
+  {# §body-composition: multi-frequency BIA scan (fork owner decision
+     2026-10-27, docs/PRODUCT_AUTHORITY.md). health.py's `body-composition`
+     read command (via /api/dash/body-composition) supplies every number;
+     this card only renders it. #}
+  <div class="card" data-cat="body">
+    <div class="row between wrap mb-2">
+      <h3 class="card-title">Body composition <span class="muted micro">multi-frequency BIA scan</span></h3>
+      <span class="muted micro" id="bc-meta">—</span>
+    </div>
+    <p class="muted note-txt" id="bc-empty" hidden>No body composition scan logged yet — paste one below.</p>
+    <div id="bc-body" hidden>
+      <div class="row gap-3 wrap mb-2">
+        <div class="kv"><span class="n" id="bc-score">—</span><span class="u">body score / 100</span></div>
+        <span class="chip" id="bc-bmi">—</span>
+        <span class="chip" id="bc-bodytype">—</span>
+      </div>
+      <div class="table-wrap">
+        <table class="ltab">
+          <thead><tr><th>Component</th><th>Measured</th><th>Reference</th><th>% of weight</th><th>Flag</th></tr></thead>
+          <tbody id="bc-components"></tbody>
+        </table>
+      </div>
+      <div class="grid-2 mt-2">
+        <div>
+          <div class="muted micro mb-1">Segmental fat <span class="dim">80–160% of standard is typical — an inferred value, not a direct measurement</span></div>
+          <div class="table-wrap"><table class="ltab">
+            <thead><tr><th>Segment</th><th>Mass</th><th>% of standard</th><th>Flag</th></tr></thead>
+            <tbody id="bc-fat"></tbody>
+          </table></div>
+        </div>
+        <div>
+          <div class="muted micro mb-1">Muscle balance</div>
+          <div class="table-wrap"><table class="ltab">
+            <thead><tr><th>Segment</th><th>Mass</th><th>% of standard</th><th>Flag</th></tr></thead>
+            <tbody id="bc-muscle"></tbody>
+          </table></div>
+        </div>
+      </div>
+      <div class="muted micro mt-2 mb-1">Bioelectrical impedance <span class="dim">Ω</span></div>
+      <div class="table-wrap">
+        <table class="ltab">
+          <thead><tr><th>Frequency</th><th>Right arm</th><th>Left arm</th><th>Trunk</th><th>Right leg</th><th>Left leg</th></tr></thead>
+          <tbody id="bc-impedance"></tbody>
+        </table>
+      </div>
+      <div class="grid-2 mt-2">
+        <div class="vstack gap-2">
+          <div class="row between"><span class="muted micro">Obesity degree</span><span id="bc-obesity">—</span></div>
+          <div class="row between"><span class="muted micro">Target weight</span><span id="bc-target">—</span></div>
+          <div class="row between"><span class="muted micro">Weight / fat / muscle control</span><span id="bc-control">—</span></div>
+        </div>
+        <div class="vstack gap-2">
+          <div class="row between"><span class="muted micro">Visceral fat grade</span><span id="bc-visceral">—</span></div>
+          <div class="row between"><span class="muted micro">BMR</span><span id="bc-bmr">—</span></div>
+          <div class="row between"><span class="muted micro">Fat-free mass / Subcutaneous fat</span><span id="bc-otherfat">—</span></div>
+          <div class="row between"><span class="muted micro">SMI / Body age / WHR</span><span id="bc-othersmi">—</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid-2" data-cat="body">
+    <div class="card">
+      <h3 class="card-title">Body composition — weight &amp; fat mass <span class="muted micro">kg</span></h3>
+      <div id="ch-bc-weight" class="h230"></div>
+    </div>
+    <div class="card">
+      <h3 class="card-title">Body composition — body fat % <span class="muted micro">%</span></h3>
+      <div id="ch-bc-bodyfat" class="h230"></div>
+    </div>
+    <div class="card">
+      <h3 class="card-title">Body composition — skeletal muscle <span class="muted micro">kg</span></h3>
+      <div id="ch-bc-muscle" class="h230"></div>
+    </div>
+    <div class="card">
+      <h3 class="card-title">Body composition — visceral fat grade</h3>
+      <div id="ch-bc-visceral" class="h230"></div>
+    </div>
+  </div>
+
+  <div class="card" data-cat="body">
+    <h3 class="card-title mb-2">Log a body composition scan</h3>
+    <p class="muted note-txt">Paste one report document (see docs/LOCAL_MCP.md "Write/ingest" for the exact field list) and submit — it crosses the same validated writer the CLI and MCP health_write use. Re-submitting the same date/device replaces that scan.</p>
+    <textarea id="bc-paste" class="note-editor" style="min-height:140px" spellcheck="false"
+      placeholder='{"date": "2026-06-29", "components": [{"component": "weight", "value_kg": 81.2}], ...}'></textarea>
+    <div class="row gap-2 mt-2 wrap">
+      <button class="btn" id="bc-submit" type="button">Log scan</button>
+      <span class="muted micro" id="bc-submit-msg"></span>
+    </div>
+  </div>
+
   <div class="grid-2">
     <div class="card" data-cat="recovery">
       <h3 class="card-title">Sleep stages <span class="muted micro">sleep_log</span></h3>

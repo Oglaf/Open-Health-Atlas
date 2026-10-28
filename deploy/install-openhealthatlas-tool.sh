@@ -80,10 +80,10 @@ import sys
 sys.path.insert(0, "/opt/openhealthatlas-fictional/toolkit")
 from hermes_insights.migrations import schema_status
 version = schema_status(sys.argv[1])["current_version"]
-if version not in {6, 7}:
-    raise SystemExit("fictional tool requires an initialized schema-v6 or schema-v7 fixture")
+if version not in {6, 7, 8}:
+    raise SystemExit("fictional tool requires an initialized schema-v6, schema-v7 or schema-v8 fixture")
 config = json.loads(Path("/opt/openhealthatlas-fictional/deploy/hermes-openhealthatlas-tool-config.json").read_text())
-config["readiness_fixture_lane"] = {6: "development-v6", 7: "development-v7"}[version]
+config["readiness_fixture_lane"] = {6: "development-v6", 7: "development-v7", 8: "development-v8"}[version]
 print(json.dumps(config, indent=2, sort_keys=True))
 PYCONFIG
 

@@ -33,6 +33,33 @@ def test_tables_list(client):
     assert "vitals" in t and "daily_metrics" in t
 
 
+def test_body_composition_tables_are_exportable(client, tmp_path):
+    """§body-composition (Migration 008): export is schema-driven (_tables()
+    reads sqlite_master), so the four new tables need no registration — this
+    pins that they actually show up and export real rows."""
+    con = sqlite3.connect(tmp_path / "health.db")
+    con.execute("PRAGMA foreign_keys=ON")
+    con.execute(
+        "INSERT INTO body_composition_scans(date, bmi) VALUES('2026-02-10', 25.8)"
+    )
+    scan_id = con.execute("SELECT last_insert_rowid()").fetchone()[0]
+    con.execute(
+        "INSERT INTO body_composition_components(scan_id, component, value_kg) "
+        "VALUES(?, 'weight', 84.4)", (scan_id,),
+    )
+    con.commit(); con.close()
+
+    t = client.get("/api/export/tables").get_json()["tables"]
+    for table in ("body_composition_scans", "body_composition_components",
+                  "body_composition_segments", "body_composition_impedance"):
+        assert table in t
+
+    r = client.get("/api/export/table?name=body_composition_scans&format=csv")
+    assert r.status_code == 200 and "25.8" in r.get_data(as_text=True)
+    r2 = client.get("/api/export/table?name=body_composition_components&format=csv")
+    assert r2.status_code == 200 and "84.4" in r2.get_data(as_text=True)
+
+
 def test_csv_export(client):
     r = client.get("/api/export/table?name=vitals&format=csv")
     assert r.status_code == 200 and "text/csv" in r.content_type

@@ -180,8 +180,35 @@ client — for example a family health coach — can LOG records on behalf of a
 named family member: calories/food (`eat`, `log-food`), training sets
 (`log-set`) and routines (`routine-set`, `routine-remove`, `routine-undo`),
 check-ins and day ratings (`checkin`, `day-rating`), notes (`write-note`),
-commitments (`commitment-set`, `commitment-list`, `log-commitment`), and
-batch/prep/schedule entries (`set-batch`, `prep`, `schedule-set`).
+commitments (`commitment-set`, `commitment-list`, `log-commitment`),
+batch/prep/schedule entries (`set-batch`, `prep`, `schedule-set`), and a full
+multi-frequency BIA body-composition scan (`log-body-composition`) — e.g. an
+agent that read a photo of a device printout like a Relaxmedic body
+composition analysis report.
+
+`log-body-composition` takes its whole report as one JSON document in
+`stdin` (as a string, up to 64 KiB — larger than the 4 KiB free-text cap used
+by `write-note`): `date` (required, `YYYY-MM-DD`), optional `tested_at`
+(`HH:MM`), `device`, `subject_label`, `sex`, `age_years`, `height_cm`;
+`components` (an array of `{component, value_kg, ref_low, ref_high,
+pct_of_weight, evaluation}`, `component` one of `weight`, `body_fat`,
+`inorganic_salt`, `protein`, `body_water`, `muscle`, `skeletal_muscle`);
+`segments` (an array of `{kind, segment, mass_kg, pct_of_standard,
+evaluation, std_low_pct, std_high_pct}`, `kind` one of `fat`/`muscle`,
+`segment` one of `left_arm`, `right_arm`, `trunk`, `left_leg`, `right_leg`);
+`impedance` (an array of `{frequency_khz, segment, ohms}`); and the scalar
+obesity/score/control fields (`bmi`, `body_fat_pct`, `body_score`,
+`target_weight_kg`, `weight_control_kg`, `fat_control_kg`,
+`muscle_control_kg`, `bmi_band`, `body_fat_band`, `obesity_degree_pct`,
+`obesity_degree_band`, `body_type`, `visceral_fat_grade`, `bmr_kcal`,
+`fat_free_mass_kg`, `subcutaneous_fat_pct`, `smi_kg_m2`, `body_age`, `whr`,
+`notes`, `report_ref`). Every field is validated server-side (closed schema,
+plausibility-clamped, enum-checked); re-sending the same `(date, tested_at,
+device)` replaces that scan instead of duplicating it. The scan's weight and
+body-fat % are also mirrored into the ordinary weight/body-fat trend as a
+`bia-scan`-sourced row, without shadowing a manual entry for the same date.
+docs/PRODUCT_AUTHORITY.md "Fork deployment: body composition analysis
+report" records the owner decision.
 
 Nothing about the write path is new: every `health_write` call crosses the
 hermes-bridge broker's SO_PEERCRED gate, subcommand/flag whitelist, stdin
@@ -248,7 +275,7 @@ ask about a specific date range present in your records.
 | `health_analyze` | Start a bounded analysis for an outcome and selected exposures. |
 | `health_evidence` | Start verification of complete evidence references returned by earlier results. |
 | `health_task_status` | Wait briefly for a background task and retrieve its result. |
-| `health_write` | **Multi-user only, ingest-only.** Logs a validated record (food/calories, training sets, routines, check-ins, day ratings, notes, commitments, schedules) for one named user through the deployment's audited write broker; present-but-refusing when no broker socket is configured. Not available in single-user mode. See [Write/ingest (health_write)](#writeingest-health_write). |
+| `health_write` | **Multi-user only, ingest-only.** Logs a validated record (food/calories, training sets, routines, check-ins, day ratings, notes, commitments, schedules, or a full body-composition scan) for one named user through the deployment's audited write broker; present-but-refusing when no broker socket is configured. Not available in single-user mode. See [Write/ingest (health_write)](#writeingest-health_write). |
 
 The client should discover feature keys before querying, use explicit date
 ranges and pass complete returned evidence-reference objects when verifying

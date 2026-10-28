@@ -190,8 +190,10 @@ and protected generic health tools also retain separate limits.
 
 Deploy the complete matching toolkit and broker declarations. An older health
 database needs an explicit schema plan and migrations through `health.py`;
-version 6 rebuilds two synthesis tables and version 7 updates the lab catalog
-constraint while preserving records and historical confirmation labels. Make verified consistent
+version 6 rebuilds two synthesis tables, version 7 updates the lab catalog
+constraint while preserving records and historical confirmation labels, and
+version 8 adds the four additive §body-composition tables (this fork only).
+Make verified consistent
 snapshots first, rehearse locally on the server, pause writers during the final
 migration and compare named-column record contents before resuming. A failed
 later migration can leave an earlier step committed; restore the verified
@@ -216,7 +218,9 @@ label and creation time, and adds support for both labels. Existing migrations
 continues to write `user-confirmed`. Rehearse upgrades against verified private
 copies before enabling the updated code against existing records.
 
-Readiness fixture lanes remain explicit: accepted-v5, development-v6 and
-development-v7 identify their exact schema versions. Existing fixtures are
-validated and keep their matching lane; configuration changes do not silently
-migrate or relabel them.
+Readiness fixture lanes remain explicit: accepted-v5, development-v6,
+development-v7 and development-v8 identify their exact schema versions.
+Migration 008 (this fork only; §body-composition) adds no Recovery-relevant
+schema change, so development-v8 follows the identical lane contract as v6/v7.
+Existing fixtures are validated and keep their matching lane; configuration
+changes do not silently migrate or relabel them.
