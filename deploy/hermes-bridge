@@ -43,8 +43,9 @@ import time
 
 from bridge_commands import (
     ADMIN_COMMANDS, COMMAND_FLAGS, NO_VALUE_FLAGS, OUTCOME_ANALYSIS_TIMEOUT,
-    PROFILE_MAX_BYTES, ProfileError, load_profile, parse_allowed_uids,
-    validate_profile,
+    PROFILE_MAX_BYTES, ProfileError, SELF_SERVICE_COMMANDS, load_profile,
+    parse_allowed_uids, read_profile_file, validate_profile,
+    validate_profile_values,
 )
 
 # In a full-repo deployment (Docker; see deploy/docker/oha) this file lives at
@@ -346,6 +347,42 @@ def _validate_profile_stdin(stdin):
     return None
 
 
+def _validate_self_service_command(subcmd, args, user):
+    """Defense-in-depth for the self-service profile merge (fork owner
+    decision 2026-10-29, docs/PRODUCT_AUTHORITY.md): the target is always the
+    CALLING identity (`user`), never an argument — unlike ADMIN_COMMANDS,
+    which take an explicit target id and whose actor-authorization is the
+    panel's job. Here there is no separate actor: a user can only ever merge
+    their own profile.json, so this function IS the complete authorization."""
+    if args:
+        return f"{subcmd} accepts no positional arguments"
+    if not BRIDGE_USERS_ROOT:
+        return "multi-user mode is not enabled (BRIDGE_USERS_ROOT is unset)"
+    if user is None or user == BRIDGE_OWNER_USER:
+        return "the bootstrap owner has no per-user profile"
+    if _user_dir(user) is None:
+        return f"unknown or invalid user: {user!r}"
+    return None
+
+
+def _validate_profile_patch_stdin(stdin):
+    if not isinstance(stdin, str):
+        return "profile merge requires stdin JSON"
+    if len(stdin.encode("utf-8")) > PROFILE_MAX_BYTES:
+        return "profile patch exceeds the 16 KiB limit"
+    try:
+        data = json.loads(stdin)
+    except ValueError:
+        return "invalid profile JSON"
+    try:
+        validate_profile(data, allow_null=True)
+    except ProfileError as exc:
+        return str(exc)
+    if not data:
+        return "profile patch must not be empty"
+    return None
+
+
 def _provision_user(target):
     """Idempotently create <target>'s own directory + health.db + vault,
     using the exact same initialisation code as `flask user-create` and
@@ -383,16 +420,11 @@ def _provision_user(target):
     }), ""
 
 
-def _profile_write(target, stdin):
-    user_dir = _admin_user_dir(target)
-    if user_dir is None or not os.path.isdir(user_dir):
-        return 2, "", "unknown target user"
-    try:
-        data = json.loads(stdin)
-        validate_profile(data)
-    except (ValueError, ProfileError) as exc:
-        return 2, "", f"invalid profile: {exc}"
-    payload = (json.dumps(data, indent=2, sort_keys=True) + "\n").encode("utf-8")
+def _atomic_profile_write(user_dir, payload):
+    """Write `payload` (already-validated bytes) to <user_dir>/profile.json
+    via tmp-file + rename (atomic; never a torn read for a concurrent
+    request), mode 0600. Raises on failure; callers run inside the broker's
+    normal exception handling."""
     profile_path = os.path.join(user_dir, "profile.json")
     fd, tmp_name = tempfile.mkstemp(dir=user_dir, prefix=".profile.", suffix=".tmp")
     try:
@@ -406,6 +438,19 @@ def _profile_write(target, stdin):
         except OSError:
             pass
         raise
+
+
+def _profile_write(target, stdin):
+    user_dir = _admin_user_dir(target)
+    if user_dir is None or not os.path.isdir(user_dir):
+        return 2, "", "unknown target user"
+    try:
+        data = json.loads(stdin)
+        validate_profile(data)
+    except (ValueError, ProfileError) as exc:
+        return 2, "", f"invalid profile: {exc}"
+    payload = (json.dumps(data, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    _atomic_profile_write(user_dir, payload)
     return 0, json.dumps({"ok": True}), ""
 
 
@@ -431,13 +476,58 @@ def _run_admin_command(subcmd, args, stdin):
     return _profile_clear(target)
 
 
-def _validate(subcmd, args):
+def _profile_merge(user, stdin):
+    """Merge a validated partial profile.json patch into the CALLING user's
+    OWN profile.json (never a target argument — see
+    _validate_self_service_command, which has already refused an unknown
+    user, the bootstrap owner, or a disabled multi-user install by the time
+    this runs). A key mapped to JSON null removes it. Re-validates the FULL
+    merged document (validate_profile + validate_profile_values) before
+    writing: value-level checks catch exactly the malformed *_JSON shapes
+    that would otherwise only surface when hermes_insights.catalogs/nutrition
+    imports in this user's own health.py child process — taking every one of
+    their requests down at import, not at this boundary."""
+    user_dir = _user_dir(user)
+    if user_dir is None:
+        return 2, "", "unknown or invalid user"
+    try:
+        patch = json.loads(stdin)
+    except ValueError:
+        return 2, "", "invalid profile JSON"
+    existing, err = read_profile_file(os.path.join(user_dir, "profile.json"))
+    if err is not None:
+        return 1, "", f"existing profile is invalid: {err}"
+    try:
+        validate_profile(existing)
+    except ProfileError as exc:
+        return 1, "", f"existing profile is invalid: {exc}"
+    merged = dict(existing)
+    for key, value in patch.items():
+        if value is None:
+            merged.pop(key, None)
+        else:
+            merged[key] = value
+    try:
+        validate_profile(merged)
+        validate_profile_values(merged)
+    except ProfileError as exc:
+        return 2, "", str(exc)
+    payload = (json.dumps(merged, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    if len(payload) > PROFILE_MAX_BYTES:
+        return 2, "", "profile.json would exceed the 16 KiB limit"
+    _atomic_profile_write(user_dir, payload)
+    return 0, json.dumps({"ok": True}), ""
+
+
+def _validate(subcmd, args, user=None):
     if subcmd not in ALLOWED:
         return f"subcommand not allowed via the bridge: {subcmd}"
     if len(args) > MAX_ARGS:
         return "too many arguments"
     if subcmd in ADMIN_COMMANDS:
         return _validate_admin_command(subcmd, args)
+    if subcmd in SELF_SERVICE_COMMANDS:
+        return _validate_self_service_command(subcmd, args, user)
     if subcmd == "analysis-job-start":
         return None if not args else "analysis job start accepts only request JSON"
     if subcmd == "analysis-job-status":
@@ -543,7 +633,7 @@ def handle(subcmd, args, peer_uid, stdin=None, user=None):
     audit_argv = _audit_argv(subcmd, args)   # --why/--note values never verbatim
     ts = time.strftime("%Y-%m-%dT%H:%M:%S")
 
-    err = _validate(subcmd, args)
+    err = _validate(subcmd, args, user)
     if err is None and subcmd == "analysis-job-start":
         err = _analysis_request(stdin)
     if err is None and subcmd == "analysis-job-status" and stdin is not None:
@@ -552,11 +642,15 @@ def handle(subcmd, args, peer_uid, stdin=None, user=None):
         err = _validate_profile_stdin(stdin)
     if err is None and subcmd in {"user-provision", "user-profile-clear"} and stdin is not None:
         err = f"{subcmd} accepts no stdin"
-    # ADMIN_COMMANDS run in-process on a TARGET user's directory, never the
-    # calling (`user`) identity's own — _resolve_user_env would be answering
-    # the wrong question here, so it is skipped entirely for these subcmds.
+    if err is None and subcmd == "user-profile-merge":
+        err = _validate_profile_patch_stdin(stdin)
+    # ADMIN_COMMANDS run in-process on a TARGET user's directory, and
+    # SELF_SERVICE_COMMANDS run in-process on the CALLING user's own
+    # directory — neither needs health.py's HEALTH_DB/HEALTH_VAULT env
+    # overlay, so _resolve_user_env (which also re-validates that user's
+    # CURRENT profile.json) is skipped entirely for both.
     env_overlay = None
-    if err is None and subcmd not in ADMIN_COMMANDS:
+    if err is None and subcmd not in ADMIN_COMMANDS and subcmd not in SELF_SERVICE_COMMANDS:
         try:
             env_overlay = _resolve_user_env(user)
         except _ProfileRefused as exc:
@@ -591,6 +685,9 @@ def handle(subcmd, args, peer_uid, stdin=None, user=None):
     if subcmd in ADMIN_COMMANDS:
         # In-process: no health.py/hermesctl subprocess, no env_overlay.
         code, stdout, stderr = _run_admin_command(subcmd, args, stdin)
+    elif subcmd in SELF_SERVICE_COMMANDS:
+        # In-process, on the CALLING user's own directory — no env_overlay.
+        code, stdout, stderr = _profile_merge(user, stdin)
     else:
         if subcmd in HERMESCTL_CMDS:
             exec_argv = [sys.executable, HERMESCTL, HERMESCTL_CMDS[subcmd], *args]

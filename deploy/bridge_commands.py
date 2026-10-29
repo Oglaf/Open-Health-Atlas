@@ -9,9 +9,17 @@ It also owns the per-user profile.json whitelist and its validation (see
 docs/MULTI_USER.md "Per-user profile settings") — the ONE place both the
 broker's child-env overlay and the panel's read-only display helper
 (app.users.current_profile) resolve the same keys the same way.
+
+A minimal systemd install (deploy/install-bridge.sh) copies only this file,
+hermes-bridge and hermesctl — never toolkit/ — so this module must never
+import hermes_insights. Where a value check here needs to mirror a toolkit
+invariant (nutrient target names, diet phase keys), the set is duplicated as a
+literal with a comment naming its toolkit source of truth, and
+tests/test_bridge.py pins the two copies together.
 """
 import errno
 import json
+import math
 import os
 import stat
 
@@ -59,7 +67,7 @@ COMMAND_FLAGS = {
     # §3f muscle figure — read-only display payload (map authored in health.py;
     # --side-mode is the Phase-2 strength-balance Combined|L/R sub-view)
     "muscle-map":          {"--lens", "--days", "--side-mode"},
-    # §4b timing adherence — read-only (planned-time-set is NOT here)
+    # §4b timing adherence — read-only (planned-time-set: see 2026-10-29 block)
     "timing-adherence":    {"--days"},
     # §body-composition multi-frequency BIA report (fork owner decision
     # 2026-10-27, docs/PRODUCT_AUTHORITY.md): validated write (JSON on
@@ -75,8 +83,27 @@ COMMAND_FLAGS = {
     # every allowlist, unchanged (tests/test_bridge.py, tests/test_local_mcp_write.py).
     "import-hevy-upload":   {"--dry-run"},
     # T44 targets engine — read-only compute, zero flags (profile-set /
-    # phase-set / nutrition-target-set are owner config, NOT here)
+    # phase-set / nutrition-target-set: see the 2026-10-29 block below)
     "nutrition-targets":   set(),
+    # Fork 2026-10-29 (docs/PRODUCT_AUTHORITY.md): owner-config setters allowed
+    # for panel + MCP health_write as validated per-record writes by the
+    # logged-in user on their own data. Positional values and semantics stay
+    # validated by health.py; these are flag whitelists only.
+    "profile-set":            set(),
+    "phase-set":              set(),
+    "nutrition-target-set":   {"--target"},
+    "planned-time-set":       {"--tolerance"},
+    # Fork 2026-10-29 (docs/PRODUCT_AUTHORITY.md "manual daily capture"):
+    # water-add is additive (never clobbers the day's total, unlike the
+    # generic `log intake` writer); supplement-log/pain-log follow below.
+    "water-add":              {"--date"},
+    "supplement-log": {"--taken", "--dose", "--time", "--date", "--note",
+                       "--capture-id", "--source"},
+    # §3g reversal: pain-log alone rejoins the allowlist (self-test-log,
+    # exercise-trial-log, physio-void stay collector/agent-only, unchanged).
+    "pain-log": {"--intensity", "--side", "--quality", "--pattern", "--flags",
+                "--note", "--date", "--source", "--reported-onset-date",
+                "--onset-precision", "--capture-id"},
     # T46 target-coverage score — read-only, shares the T44 targets engine;
     # value whitelist (7/30/90/365) is enforced by health.py's own argparse
     # choices, this flag whitelist is defense in depth
@@ -125,6 +152,12 @@ COMMAND_FLAGS = {
     "user-provision":      set(),
     "user-profile-write":  set(),   # profile JSON arrives on stdin
     "user-profile-clear":  set(),
+    # Fork 2026-10-29 (docs/PRODUCT_AUTHORITY.md): self-service profile.json
+    # merge. Unlike ADMIN_COMMANDS, the target is the CALLING user (the
+    # request's `user` field), never an argument — see SELF_SERVICE_COMMANDS
+    # and deploy/hermes-bridge's _validate_self_service_command/_profile_merge.
+    # A partial JSON patch arrives on stdin; a key mapped to null removes it.
+    "user-profile-merge":  set(),
 }
 
 # Admin-only commands executed directly by the broker process (no health.py /
@@ -132,6 +165,12 @@ COMMAND_FLAGS = {
 # caller's own — validated against USER_ID_RE and refused for the bootstrap
 # owner. See deploy/hermes-bridge's _validate_admin_command/_run_admin_command.
 ADMIN_COMMANDS = frozenset({"user-provision", "user-profile-write", "user-profile-clear"})
+
+# Self-service commands executed directly by the broker process (no health.py
+# subprocess), like ADMIN_COMMANDS, but keyed on the CALLING identity instead
+# of a target argument. See deploy/hermes-bridge's
+# _validate_self_service_command/_profile_merge.
+SELF_SERVICE_COMMANDS = frozenset({"user-profile-merge"})
 
 # Preserve the existing client-side flag-check subset. The broker checks flags
 # for every command; extending client checks is a separate behavior change.
@@ -220,19 +259,85 @@ class ProfileError(ValueError):
     """A profile.json object fails the whitelist — message is safe to audit."""
 
 
-def validate_profile(data) -> None:
+def validate_profile(data, *, allow_null=False) -> None:
     """Raise ProfileError on the first violation; otherwise do nothing.
-    `data` is an already-parsed JSON value (not yet known to be an object)."""
+    `data` is an already-parsed JSON value (not yet known to be an object).
+    `allow_null=True` additionally permits JSON null as a key's value — the
+    self-service merge patch's "remove this key" marker (see
+    deploy/hermes-bridge's _profile_merge); the full-document writers
+    (user-profile-write, profile_env_overlay) never pass it."""
     if not isinstance(data, dict):
         raise ProfileError("profile.json must be a JSON object")
     for key, value in data.items():
         if key not in PROFILE_KEYS:
             raise ProfileError(f"profile key not allowed: {key}")
+        if allow_null and value is None:
+            continue
         if key in PROFILE_JSON_KEYS:
             if not isinstance(value, (dict, list)):
                 raise ProfileError(f"profile key {key} must be a JSON object or array")
         elif isinstance(value, bool) or not isinstance(value, (str, int, float)):
             raise ProfileError(f"profile key {key} must be a string or number")
+
+
+# ── value-level validation beyond the key/type whitelist above ──────────────
+# A malformed *_JSON value (unknown nutrient key, missing diet phase, non-
+# finite number) passes validate_profile's shape check but takes a user's
+# health.py child process down at import (hermes_insights.catalogs /
+# hermes_insights.nutrition module-level parsing) — not at this boundary.
+# These mirror hermes_insights.catalogs.MICRO_KEYS and
+# hermes_insights.nutrition.DIET_PHASES; see this module's docstring for why
+# they are duplicated rather than imported. tests/test_bridge.py pins both
+# copies together so they cannot silently drift.
+MICRO_TARGET_NAMES = frozenset({
+    "vitamin_d", "magnesium", "omega3_epa_dha", "zinc", "iron",
+    "vitamin_b12", "calcium", "potassium", "vitamin_c", "folate",
+})
+DIET_PHASE_NAMES = frozenset({"cut", "maintain", "bulk"})
+
+# Sanity bounds, not toolkit-enforced values: hermes_insights.nutrition only
+# requires phase offsets to be finite and protein-per-kg to be > 0. These
+# bounds catch fat-fingered input (e.g. a kcal offset typo'd by 10x) without
+# constraining any value the owner's targets engine would actually accept.
+PHASE_OFFSET_BOUNDS = (-2000, 2000)
+PROTEIN_PER_KG_BOUNDS = (0, 5)   # exclusive lower bound
+
+
+def _finite_number(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
+
+
+def validate_profile_values(data) -> None:
+    """Defense-in-depth beyond validate_profile's key/type whitelist. Call
+    AFTER validate_profile(data) (no allow_null — this checks a final,
+    fully-resolved document, never a merge patch with nulls still in it).
+    Raises ProfileError on the first violation."""
+    if "HERMES_NUTRIENT_TARGETS_JSON" in data:
+        targets = data["HERMES_NUTRIENT_TARGETS_JSON"]
+        if not isinstance(targets, dict) or not set(targets) <= MICRO_TARGET_NAMES:
+            raise ProfileError("HERMES_NUTRIENT_TARGETS_JSON has unknown nutrient keys")
+        for value in targets.values():
+            number = _finite_number(value)
+            if number is None or number <= 0:
+                raise ProfileError(
+                    "HERMES_NUTRIENT_TARGETS_JSON values must be positive finite numbers"
+                )
+    for key, (lo, hi), inclusive_lo in (
+        ("HERMES_PHASE_OFFSETS_JSON", PHASE_OFFSET_BOUNDS, True),
+        ("HERMES_PROTEIN_PER_KG_JSON", PROTEIN_PER_KG_BOUNDS, False),
+    ):
+        if key not in data:
+            continue
+        values = data[key]
+        if not isinstance(values, dict) or set(values) != DIET_PHASE_NAMES:
+            raise ProfileError(f"{key} must define exactly cut, maintain, and bulk")
+        for value in values.values():
+            number = _finite_number(value)
+            if number is None or number > hi or (number < lo if inclusive_lo else number <= lo):
+                raise ProfileError(f"{key} values are out of range")
 
 
 def profile_env_overlay(data) -> dict:

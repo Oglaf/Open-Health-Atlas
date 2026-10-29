@@ -181,10 +181,18 @@ named family member: calories/food (`eat`, `log-food`), training sets
 (`log-set`) and routines (`routine-set`, `routine-remove`, `routine-undo`),
 check-ins and day ratings (`checkin`, `day-rating`), notes (`write-note`),
 commitments (`commitment-set`, `commitment-list`, `log-commitment`),
-batch/prep/schedule entries (`set-batch`, `prep`, `schedule-set`), and a full
+batch/prep/schedule entries (`set-batch`, `prep`, `schedule-set`), a full
 multi-frequency BIA body-composition scan (`log-body-composition`) — e.g. an
 agent that read a photo of a device printout like a Relaxmedic body
-composition analysis report.
+composition analysis report — and, per the 2026-10-29 PRODUCT_AUTHORITY.md
+decision, that named user's OWN profile/targets configuration: `profile-set`,
+`phase-set`, `nutrition-target-set`, `planned-time-set` (the same owner-config
+setters the panel's self-service Profile & targets page uses), plus
+`user-profile-merge` — a partial JSON patch (stdin) merged into that user's
+own per-user `profile.json` nutrition overlay (nutrient targets, phase
+offsets, protein-per-kg); a key mapped to JSON null removes it. Every one of
+these, like every other health_write command, always targets the call's own
+`user` argument — there is no way to name a different target user.
 
 The panel's own guarded Hevy CSV import (`import-hevy-upload`, the Body
 page's "Import Hevy CSV" button) is a separate, narrower exception reachable
@@ -281,7 +289,7 @@ ask about a specific date range present in your records.
 | `health_analyze` | Start a bounded analysis for an outcome and selected exposures. |
 | `health_evidence` | Start verification of complete evidence references returned by earlier results. |
 | `health_task_status` | Wait briefly for a background task and retrieve its result. |
-| `health_write` | **Multi-user only, ingest-only.** Logs a validated record (food/calories, training sets, routines, check-ins, day ratings, notes, commitments, schedules, or a full body-composition scan) for one named user through the deployment's audited write broker; present-but-refusing when no broker socket is configured. Not available in single-user mode. See [Write/ingest (health_write)](#writeingest-health_write). |
+| `health_write` | **Multi-user only, ingest-only.** Logs a validated record (food/calories, training sets, routines, check-ins, day ratings, notes, commitments, schedules, or a full body-composition scan) or updates that named user's own profile/targets configuration (profile, phase, nutrition targets, planned times, or a profile.json nutrition-overlay patch) through the deployment's audited write broker; present-but-refusing when no broker socket is configured. Not available in single-user mode. See [Write/ingest (health_write)](#writeingest-health_write). |
 
 The client should discover feature keys before querying, use explicit date
 ranges and pass complete returned evidence-reference objects when verifying

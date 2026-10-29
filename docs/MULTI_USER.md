@@ -129,6 +129,39 @@ only `hermes-bridge`, `bridge_commands.py` and `hermesctl`); on that install
 `user-provision` fails closed with a clear error instead of a crash, and
 account creation falls back to `flask user-create` on the panel host.
 
+### Self-service Profile & targets
+
+`/profile` (any logged-in user, their own data only — see the 2026-10-29
+PRODUCT_AUTHORITY.md entry) lets a user set their own T43/T44/§4b
+configuration from the browser instead of the CLI/SSH/MCP-only path: sex,
+date of birth, height, activity fallback (`profile-set`), diet phase
+(`phase-set`), kcal/protein overrides (`nutrition-target-set`), and planned
+wake/bed/workout/medication times (`planned-time-set`). These four
+`health.py` subcommands already validated everything; this fork only added
+them to the panel bridge's and the local MCP's allowlists
+(`deploy/bridge_commands.py` COMMAND_FLAGS / `scripts/openhealthatlas_mcp.py`
+HEALTH_WRITE_COMMANDS) — no new validation, no schema change.
+
+The page also edits a non-owner user's own **per-user profile settings**
+(above): micronutrient targets, diet-phase kcal offsets, and protein-per-kg,
+all stored in that user's `profile.json`. Unlike the admin-only
+`user-profile-write` (whole-file replace, admin picks the target id), this
+goes through a new self-service broker command:
+
+| Subcommand | Does |
+|---|---|
+| `user-profile-merge` | Merges a partial JSON patch (stdin) into the CALLING user's OWN `profile.json` — never a target argument. A key mapped to JSON null removes it. Re-validates the full merged document, including value-level checks (nutrient names against the known catalog, exact cut/maintain/bulk phase keys, numeric bounds) that catch a malformed value before it can take that user's own `health.py` child process down at import. Refused for the bootstrap owner (who has no `profile.json`) and for any id outside `BRIDGE_USERS_ROOT`. |
+
+`user-profile-merge` runs in the broker process itself, like the admin
+commands, but is declared separately (`SELF_SERVICE_COMMANDS`, not
+`ADMIN_COMMANDS`) because its authorization model is different: there is no
+separate "target id" to validate against an acting admin, since a user can
+only ever merge their own file. The bootstrap owner has no `profile.json` at
+all — it keeps reading the three nutrition `HERMES_*_JSON` variables from the
+installation environment, so the page shows that section as unavailable with
+a reason, while the DB-backed sections (profile, phase, targets, planned
+times) still work for the owner too.
+
 ### Panel configuration
 
 | Variable | Default | Purpose |

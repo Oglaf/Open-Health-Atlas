@@ -372,3 +372,74 @@ def test_broker_allowed_uids_fallback_and_set(monkeypatch):
     monkeypatch.delenv("BRIDGE_ALLOWED_UID", raising=False)
     with patch.object(b.pwd, "getpwnam", lambda name: type("R", (), {"pw_uid": 4242})()):
         assert b._allowed_uids() == frozenset({4242})   # unset -> default (panel uid)
+
+
+def test_profile_and_targets_setters_pin_exact_flags():
+    """Fork 2026-10-29 (docs/PRODUCT_AUTHORITY.md): profile-set/phase-set take
+    no flags; nutrition-target-set takes only --target; planned-time-set
+    takes only --tolerance. Positional values stay validated by health.py."""
+    b = _load()
+    assert b._validate("profile-set", ["sex", "male"]) is None
+    assert b._validate("profile-set", ["sex", "male", "--evil", "x"]) is not None
+    assert b._validate("phase-set", ["cut"]) is None
+    assert b._validate("phase-set", ["cut", "--evil", "x"]) is not None
+    assert b._validate("nutrition-target-set", ["kcal", "--target", "2200"]) is None
+    assert b._validate("nutrition-target-set", ["kcal", "--evil", "2200"]) is not None
+    assert b._validate("planned-time-set", ["dose", "08:00", "--tolerance", "30"]) is None
+    assert b._validate("planned-time-set", ["dose", "08:00"]) is None  # --tolerance optional
+    assert b._validate("planned-time-set", ["dose", "08:00", "--evil", "x"]) is not None
+
+
+def test_daily_capture_setters_pin_exact_flags():
+    """Fork 2026-10-29 (docs/PRODUCT_AUTHORITY.md "manual daily capture"):
+    water-add/supplement-log/pain-log join the allowlist with exactly the
+    flags health.py defines for them — no extra flag is accepted."""
+    b = _load()
+    assert b._validate("water-add", ["250"]) is None
+    assert b._validate("water-add", ["250", "--date", "2026-10-29"]) is None
+    assert b._validate("water-add", ["250", "--evil", "x"]) is not None
+    assert b._validate("supplement-log", [
+        "creatine", "--taken", "1", "--dose", "5", "--time", "08:00",
+        "--date", "2026-10-29", "--note", "with breakfast", "--source", "manual",
+    ]) is None
+    assert b._validate("supplement-log", ["creatine", "--evil", "x"]) is not None
+    assert b._validate("pain-log", [
+        "low-back", "--intensity", "4", "--side", "left", "--quality", "ache",
+        "--pattern", "morning", "--flags", "", "--note", "stiff on waking",
+        "--date", "2026-10-29", "--source", "manual",
+    ]) is None
+    assert b._validate("pain-log", ["low-back", "--evil", "x"]) is not None
+
+
+def test_audit_redacts_supplement_and_pain_notes():
+    """The generic REDACT_FLAGS = {--why, --note} covers every command's
+    --note, so supplement-log/pain-log need no command-specific redaction."""
+    b = _load()
+    red = b._audit_argv("supplement-log", ["creatine", "--note", "private note"])
+    assert "private note" not in red
+    red2 = b._audit_argv("pain-log", ["low-back", "--note", "private note"])
+    assert "private note" not in red2
+
+
+def test_self_service_profile_merge_refuses_owner_unknown_user_and_arguments():
+    """user-profile-merge (SELF_SERVICE_COMMANDS) targets the CALLING `user`,
+    never an argument — unlike ADMIN_COMMANDS. See _validate_self_service_command."""
+    b = _load()
+    assert "user-profile-merge" not in b.ADMIN_COMMANDS
+    assert "user-profile-merge" in b.SELF_SERVICE_COMMANDS
+    # No BRIDGE_USERS_ROOT configured in this process (single-user default).
+    assert b.BRIDGE_USERS_ROOT in (None, "")
+    assert b._validate("user-profile-merge", [], "alice") is not None
+    assert "multi-user mode" in b._validate("user-profile-merge", [], "alice")
+    assert b._validate("user-profile-merge", ["stray-arg"], "alice") is not None
+
+
+def test_self_service_profile_merge_refuses_owner_and_unknown_user_with_users_root(
+        tmp_path, monkeypatch):
+    monkeypatch.setenv("BRIDGE_USERS_ROOT", str(tmp_path))
+    (tmp_path / "alice").mkdir()
+    b = _load()
+    assert b._validate("user-profile-merge", [], None) is not None
+    assert "bootstrap owner" in b._validate("user-profile-merge", [], "owner")
+    assert "unknown or invalid user" in b._validate("user-profile-merge", [], "ghost")
+    assert b._validate("user-profile-merge", [], "alice") is None

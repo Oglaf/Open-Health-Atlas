@@ -56,25 +56,47 @@ HEALTH_WRITE_COMMANDS = (
     "routine-undo", "checkin", "day-rating", "write-note", "commitment-set",
     "commitment-list", "log-commitment", "schedule-set", "set-batch", "prep",
     "log-body-composition",
+    # Fork 2026-10-29 (docs/PRODUCT_AUTHORITY.md): owner-config setters,
+    # allowed for health_write as validated per-record writes by the named
+    # user on their own data. user-profile-merge patches that user's own
+    # profile.json (nutrient/phase/water/medication config); it never touches
+    # another user's files — the broker resolves the target from the
+    # request's own `user`, exactly like every other health_write command.
+    "profile-set", "phase-set", "nutrition-target-set", "planned-time-set",
+    "user-profile-merge",
+    # Fork 2026-10-29 (docs/PRODUCT_AUTHORITY.md "manual daily capture"):
+    # water-add (additive hydration), supplement-log (an existing active
+    # supplement_products row) and pain-log (the one §3g writer reversed out
+    # of collector/agent-only — self-test-log/exercise-trial-log/physio-void
+    # stay absent).
+    "water-add", "supplement-log", "pain-log",
 )
 NO_BROKER_REFUSAL = (
     "no broker configured; ingest is unavailable in this deployment"
 )
 HEALTH_WRITE_DESCRIPTION = (
     "Log a validated health record (food, training set, check-in, day rating, "
-    "note, commitment, routine, schedule, or a multi-frequency BIA body "
-    "composition report) for one named user through the deployment's audited "
-    "write broker. Only the broker's whitelisted write commands are accepted; "
-    "refusals are returned unchanged. For log-body-composition, pass the full "
-    "report document (date, optional tested_at/device/subject/sex/age/height, "
-    "components[], segments[], impedance[], and the scalar obesity/score/"
-    "control fields) as a JSON string in stdin."
+    "note, commitment, routine, schedule, water intake, a supplement dose, a "
+    "pain report, or a multi-frequency BIA body composition report) for one "
+    "named user through the deployment's audited write broker, or update "
+    "that user's own profile/targets configuration (profile-set, phase-set, "
+    "nutrition-target-set, planned-time-set, or the user-profile-merge JSON "
+    "patch for nutrient/phase/water/medication config). Only the broker's "
+    "whitelisted write commands are accepted; refusals are returned "
+    "unchanged. For log-body-composition, pass the full report document "
+    "(date, optional tested_at/device/subject/sex/age/height, components[], "
+    "segments[], impedance[], and the scalar obesity/score/control fields) as "
+    "a JSON string in stdin. For user-profile-merge, pass a partial JSON "
+    "object of profile keys to add/change as a JSON string in stdin; a key "
+    "mapped to null removes it."
 )
 MAX_WRITE_STDIN_BYTES = 4096      # free text (write-note) stays small
 MAX_WRITE_JSON_STDIN_BYTES = 65536  # structured BIA report document
+MAX_PROFILE_MERGE_STDIN_BYTES = 16 * 1024  # mirrors deploy.bridge_commands.PROFILE_MAX_BYTES
 STDIN_COMMAND_CAPS = {
     "write-note": MAX_WRITE_STDIN_BYTES,
     "log-body-composition": MAX_WRITE_JSON_STDIN_BYTES,
+    "user-profile-merge": MAX_PROFILE_MERGE_STDIN_BYTES,
 }
 MAX_WRITE_POSITIONALS = 8
 MAX_WRITE_FLAG_VALUES = 20
@@ -182,7 +204,10 @@ HEALTH_WRITE_SCHEMA = {
                            "log-set, routine-set, routine-remove, routine-undo, "
                            "checkin, day-rating, write-note, commitment-set, "
                            "commitment-list, log-commitment, schedule-set, "
-                           "set-batch, prep, log-body-composition).",
+                           "set-batch, prep, log-body-composition, profile-set, "
+                           "phase-set, nutrition-target-set, planned-time-set, "
+                           "user-profile-merge, water-add, supplement-log, "
+                           "pain-log).",
         },
         "positional": {
             "type": "array", "items": {"type": "string"}, "maxItems": MAX_WRITE_POSITIONALS,
@@ -293,7 +318,8 @@ def build_health_write_request(arguments, write_commands, user: object):
     if stdin is not None:
         cap = STDIN_COMMAND_CAPS.get(command)
         if cap is None:
-            return None, "stdin is only accepted for write-note or log-body-composition"
+            return None, ("stdin is only accepted for write-note, "
+                          "log-body-composition, or user-profile-merge")
         if not isinstance(stdin, str) or len(stdin.encode("utf-8")) > cap:
             return None, f"stdin exceeds the {cap // 1024} KiB write limit"
         payload["stdin"] = stdin

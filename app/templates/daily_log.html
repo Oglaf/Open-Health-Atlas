@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+{% block title %}Daily log{% endblock %}
+{% block content %}
+{# Daily log (fork owner decision 2026-10-29, docs/PRODUCT_AUTHORITY.md
+   "manual daily capture"): day rating, evening check-in, water, supplements
+   and pain — the previously-empty capture surface behind the Consistency
+   rings, dashboard heatmap and habit streaks. Every write crosses
+   /api/log/* -> the broker (app/bridge.py), exactly like every other panel
+   write. #}
+<div class="vstack">
+  <div class="row-top between wrap">
+    <div class="crumb">
+      <a class="back" href="{{ url_for('core.dashboard') }}">◱ Hub</a>
+      <h1 class="page-title">Daily log</h1>
+      <span class="muted micro">today's manual capture — day rating, check-in, water, supplements, pain</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3 class="card-title mb-2">Day rating</h3>
+    <div class="field-row">
+      <label class="field">
+        <span>Date</span>
+        <input id="dl-day-date" type="date">
+      </label>
+    </div>
+    <div class="row gap-2 mb-2">
+      <button id="dl-day-green" class="btn quiet" type="button" data-value="green">Green</button>
+      <button id="dl-day-yellow" class="btn quiet" type="button" data-value="yellow">Yellow</button>
+      <button id="dl-day-red" class="btn quiet" type="button" data-value="red">Red</button>
+    </div>
+    <p class="muted note-txt" id="dl-day-current"></p>
+    <p class="field-hint" id="dl-day-status" role="status" aria-live="polite"></p>
+  </div>
+
+  <div class="card">
+    <h3 class="card-title mb-2">Evening check-in</h3>
+    <div id="dl-commitment-empty" hidden>
+      <p class="muted note-txt mb-2">No commitments yet — create one to track your word nightly.</p>
+      <div class="field-row">
+        <label class="field"><span>Name</span><input id="dl-commit-name"></label>
+        <label class="field"><span>Identity ("I am someone who…")</span><input id="dl-commit-identity"></label>
+        <label class="field"><span>Trigger</span><input id="dl-commit-trigger"></label>
+        <label class="field"><span>Minimum floor</span><input id="dl-commit-floor"></label>
+      </div>
+      <button id="dl-commit-save" class="save-btn" type="button">Create commitment</button>
+      <p class="field-hint" id="dl-commit-status" role="status" aria-live="polite"></p>
+    </div>
+    <div id="dl-word-form" hidden>
+      <div class="field-row">
+        <label class="field">
+          <span>Commitment</span>
+          <select id="dl-commit-select" class="select"></select>
+        </label>
+      </div>
+      <div class="row gap-2 mb-2">
+        <button id="dl-word-kept" class="btn quiet" type="button" data-value="kept">Kept my word</button>
+        <button id="dl-word-partly" class="btn quiet" type="button" data-value="partly">Partly</button>
+        <button id="dl-word-broke" class="btn quiet" type="button" data-value="broke">Broke it</button>
+      </div>
+      <label class="field mb-2">
+        <span>Why (optional, one line)</span>
+        <input id="dl-word-why" maxlength="300">
+      </label>
+      <p class="muted note-txt" id="dl-word-current"></p>
+      <p class="field-hint" id="dl-word-status" role="status" aria-live="polite"></p>
+    </div>
+
+    <p class="muted note-txt mb-2">Spot readings (1–5)</p>
+    <div class="field-row">
+      <label class="field"><span>Energy</span><input id="dl-checkin-energy" type="number" min="1" max="5"></label>
+      <label class="field"><span>Focus</span><input id="dl-checkin-focus" type="number" min="1" max="5"></label>
+      <label class="field"><span>Mood</span><input id="dl-checkin-mood" type="number" min="1" max="5"></label>
+    </div>
+    <button id="dl-checkin-save" class="save-btn" type="button">Save spot readings</button>
+    <p class="field-hint" id="dl-checkin-status" role="status" aria-live="polite"></p>
+  </div>
+
+  <div class="card">
+    <h3 class="card-title mb-2">Water</h3>
+    <p class="muted note-txt" id="dl-water-total">Loading…</p>
+    <div class="row gap-2 mb-2">
+      <button id="dl-water-250" class="btn quiet" type="button" data-ml="250">+250 ml</button>
+      <button id="dl-water-500" class="btn quiet" type="button" data-ml="500">+500 ml</button>
+      <input id="dl-water-custom" type="number" min="1" max="3000" placeholder="custom ml">
+      <button id="dl-water-custom-add" class="btn quiet" type="button">Add</button>
+    </div>
+    <p class="field-hint" id="dl-water-status" role="status" aria-live="polite"></p>
+  </div>
+
+  <div class="card">
+    <h3 class="card-title mb-2">Supplements</h3>
+    <div id="dl-supplements" class="vstack"><p class="muted note-txt">Loading…</p></div>
+    <p class="field-hint" id="dl-supplement-status" role="status" aria-live="polite"></p>
+  </div>
+
+  <div class="card">
+    <h3 class="card-title mb-2">Pain</h3>
+    <div class="field-row">
+      <label class="field">
+        <span>Region</span>
+        <select id="dl-pain-region" class="select"></select>
+      </label>
+      <label class="field">
+        <span>Side</span>
+        <select id="dl-pain-side" class="select"></select>
+      </label>
+      <label class="field">
+        <span>Intensity (0–10)</span>
+        <input id="dl-pain-intensity" type="number" min="0" max="10">
+      </label>
+    </div>
+    <div class="field-row">
+      <label class="field">
+        <span>Quality</span>
+        <select id="dl-pain-quality" class="select"><option value="">Not set</option></select>
+      </label>
+      <label class="field">
+        <span>Pattern</span>
+        <select id="dl-pain-pattern" class="select"><option value="">Not set</option></select>
+      </label>
+    </div>
+    <div class="field-row" id="dl-pain-flags"></div>
+    <p class="muted note-txt" id="dl-pain-flag-note" hidden>
+      A red flag is checked — consider seeing a clinician; this is not a diagnosis.
+    </p>
+    <label class="field mb-2">
+      <span>Note (optional)</span>
+      <input id="dl-pain-note" maxlength="2000">
+    </label>
+    <button id="dl-pain-save" class="save-btn" type="button">Log pain</button>
+    <p class="field-hint" id="dl-pain-status" role="status" aria-live="polite"></p>
+
+    <p class="muted note-txt mb-2 mt-3">Last 5 reports</p>
+    <div class="table-wrap">
+      <table class="data-table" id="dl-pain-table">
+        <thead><tr><th>Date</th><th>Region</th><th>Side</th><th>Intensity</th><th>Quality</th></tr></thead>
+        <tbody id="dl-pain-recent-body"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="toast-wrap" id="toast-wrap" aria-live="polite"></div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/daily_log.js') }}" defer></script>
+{% endblock %}

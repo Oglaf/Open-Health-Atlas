@@ -321,21 +321,31 @@ def test_fitness_writes_are_not_panel_reachable():
     assert "vtaper" in bridge.ALLOWED              # §3f read is
     assert "import-hevy-body" not in bridge.ALLOWED   # collector-only import is not
     assert "timing-adherence" in bridge.ALLOWED    # §4b read is
-    assert "planned-time-set" not in bridge.ALLOWED   # §4b owner config is not
-    assert "water-add" not in bridge.ALLOWED       # §4c capture is Telegram-only
-    for w in ("import-cronometer", "nutrition-target-set", "recipe-tag",
-              "profile-set", "phase-set"):
-        assert w not in bridge.ALLOWED             # §4a import/config: agent/SSH only
-        # (recipe-tag T47 meal tags, profile-set/phase-set T43 owner profile —
-        #  all athletic-target-set posture: coach-side, never panel-reachable)
+    # Fork 2026-10-29 (docs/PRODUCT_AUTHORITY.md): planned-time-set and the
+    # §4a owner-config setters below became validated per-record writes by
+    # the logged-in user on their own data — see tests/test_log_api.py's
+    # profile-route tests and tests/test_broker_validate.py's flag pins.
+    assert "planned-time-set" in bridge.ALLOWED    # §4b owner config
+    # Fork 2026-10-29 (docs/PRODUCT_AUTHORITY.md "manual daily capture"):
+    # water-add joins the panel/MCP allowlist (additive hydration capture);
+    # see tests/test_log_api.py's water route tests.
+    assert "water-add" in bridge.ALLOWED
+    for w in ("nutrition-target-set", "profile-set", "phase-set"):
+        assert w in bridge.ALLOWED
+    for w in ("import-cronometer", "recipe-tag"):
+        assert w not in bridge.ALLOWED             # §4a import/tags: agent/SSH only
+        # (recipe-tag T47 meal tags — coach-side, never panel-reachable)
     for w in ("journal-capture", "transcript-capture"):
         assert w not in bridge.ALLOWED             # §6 raw capture: agent path only
     for w in ("schema-status", "schema-plan", "migrate", "capture-raw",
               "capture-resolve", "event-log", "event-correct", "event-void",
               "events", "capture-completeness-set", "capture-completeness",
-              "entity-alias-set", "entity-alias-retire", "entity-alias-history",
-              "supplement-log"):
+              "entity-alias-set", "entity-alias-retire", "entity-alias-history"):
         assert w not in bridge.ALLOWED             # Phase 2 agent/SSH-only surface
+    # Fork 2026-10-29 (docs/PRODUCT_AUTHORITY.md "manual daily capture"):
+    # supplement-log alone leaves the Phase 2 agent/SSH-only surface above —
+    # see tests/test_log_api.py's supplement route tests.
+    assert "supplement-log" in bridge.ALLOWED
 
 
 def test_phase3_and_phase4_exact_reads_allowed_and_all_writers_excluded():
@@ -373,13 +383,17 @@ def test_phase3_and_phase4_exact_reads_allowed_and_all_writers_excluded():
 
 
 def test_physio_writes_are_not_panel_reachable():
-    """§3g physio: pain/self-test/trial capture is a COACH conversation, not a
-    panel form (design rule 6) — the writers must never be panel-reachable. The
+    """§3g physio: self-test/trial capture is a COACH conversation, not a panel
+    form (design rule 6) — those writers must never be panel-reachable. The
     pain lens READ rides muscle-map --lens pain (already allowed, no new flag),
-    so no allowlist change was needed for the read."""
+    so no allowlist change was needed for the read.
+
+    pain-log alone reverses this rule (fork 2026-10-29, docs/PRODUCT_AUTHORITY.md
+    "manual daily capture") — see tests/test_log_api.py's pain route tests."""
     assert "muscle-map" in bridge.ALLOWED          # the pain lens read is allowed…
-    for w in ("pain-log", "self-test-log", "exercise-trial-log", "physio-void"):
-        assert w not in bridge.ALLOWED             # …but every §3g write is not
+    for w in ("self-test-log", "exercise-trial-log", "physio-void"):
+        assert w not in bridge.ALLOWED             # …but these §3g writes stay not
+    assert "pain-log" in bridge.ALLOWED            # …except pain-log, newly allowed
 
 
 def test_labs_writers_not_reachable(tmp_path, monkeypatch):

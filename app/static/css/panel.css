@@ -484,6 +484,10 @@ body.bare { display: grid; place-items: center; min-height: 100vh; padding: 20px
 .field-hint { margin: -2px 0 10px; font-size: 0.76rem; color: var(--text-dim); }
 .field-row, .water-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
 .field-row .field, .water-row .field { flex: 1; min-width: 90px; }
+/* Daily log: inline checkbox+label chips (red flags) and a compact date field */
+.field-row .field.inline { flex: 0 0 auto; min-width: 0; display: flex; flex-direction: row; align-items: center; gap: 6px; }
+.field-row .field.inline input[type="checkbox"] { width: auto; margin: 0; }
+#dl-day-date { max-width: 220px; }
 .save-btn {
   border: 0; border-radius: 10px; background: var(--accent); color: #08120d;
   font: inherit; font-weight: 700; font-size: 0.88rem; padding: 9px 16px; cursor: pointer;

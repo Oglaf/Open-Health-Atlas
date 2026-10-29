@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+{% block title %}Profile & targets{% endblock %}
+{% block content %}
+{# Self-service Profile & targets (fork owner decision 2026-10-29,
+   docs/PRODUCT_AUTHORITY.md): the logged-in user's own owner_profile/phase/
+   nutrition_targets/planned_times config, plus (non-owner only) their own
+   profile.json nutrition overlay. Every write crosses /api/profile/* -> the
+   broker (app/bridge.py), exactly like every other panel write. #}
+<div class="vstack">
+  <div class="row-top between wrap">
+    <div class="crumb">
+      <a class="back" href="{{ url_for('core.dashboard') }}">◱ Hub</a>
+      <h1 class="page-title">Profile & targets</h1>
+      <span class="muted micro">your own profile, diet phase, and nutrition targets</span>
+    </div>
+  </div>
+
+  <p class="field-hint" id="pf-load-status" role="status" aria-live="polite"></p>
+
+  <div class="card">
+    <h3 class="card-title mb-2">Profile</h3>
+    <div class="field-row">
+      <label class="field">
+        <span>Sex</span>
+        <select id="pf-sex" class="select">
+          <option value="">Not set</option>
+          <option value="male">Male</option>
+          <option value="female">Female</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Date of birth</span>
+        <input id="pf-dob" type="date">
+      </label>
+      <label class="field">
+        <span>Height (cm)</span>
+        <input id="pf-height" type="number" step="any" min="100" max="250">
+      </label>
+      <label class="field">
+        <span>Activity fallback</span>
+        <select id="pf-activity" class="select">
+          <option value="">Not set</option>
+          <option value="sedentary">Sedentary</option>
+          <option value="light">Light</option>
+          <option value="moderate">Moderate</option>
+          <option value="active">Active</option>
+          <option value="very_active">Very active</option>
+        </select>
+      </label>
+    </div>
+    <button id="pf-profile-save" class="save-btn" type="button">Save profile</button>
+    <p class="field-hint" id="pf-profile-status" role="status" aria-live="polite"></p>
+  </div>
+
+  <div class="card">
+    <h3 class="card-title mb-2">Diet phase</h3>
+    <div class="field-row">
+      <label class="field">
+        <span>Phase</span>
+        <select id="pf-phase" class="select">
+          <option value="cut">Cut</option>
+          <option value="maintain">Maintain</option>
+          <option value="bulk">Bulk</option>
+        </select>
+      </label>
+    </div>
+    <p class="muted note-txt" id="pf-phase-started"></p>
+    <button id="pf-phase-save" class="save-btn" type="button">Save phase</button>
+    <p class="field-hint" id="pf-phase-status" role="status" aria-live="polite"></p>
+  </div>
+
+  <div class="card">
+    <h3 class="card-title mb-2">Daily targets</h3>
+    <p class="muted note-txt" id="pf-engine-reason" hidden></p>
+    <div class="field-row">
+      <label class="field">
+        <span>Daily kcal (override)</span>
+        <input id="pf-target-kcal" type="number" step="any" min="1">
+      </label>
+      <label class="field">
+        <span>Daily protein g (override)</span>
+        <input id="pf-target-protein" type="number" step="any" min="1">
+      </label>
+    </div>
+    <p class="muted note-txt" id="pf-engine-band"></p>
+    <button id="pf-targets-save" class="save-btn" type="button">Save targets</button>
+    <p class="field-hint" id="pf-targets-status" role="status" aria-live="polite"></p>
+  </div>
+
+  <div class="card" id="pf-nutrition-config-card">
+    <h3 class="card-title mb-2">Nutrition detail</h3>
+    <div id="pf-nutrition-config-unavailable" hidden>
+      <p class="field-hint" role="status"></p>
+    </div>
+    <div id="pf-nutrition-config-form">
+      <p class="muted note-txt mb-2">Micronutrient targets</p>
+      <div class="field-row" id="pf-micro-rows"></div>
+      <div class="row gap-2 mb-3">
+        <select id="pf-micro-add-name" class="select"></select>
+        <input id="pf-micro-add-target" type="number" step="any" min="0" placeholder="target">
+        <button id="pf-micro-add-btn" class="btn quiet" type="button">Add</button>
+      </div>
+
+      <p class="muted note-txt mb-2">Phase offsets (kcal, relative to maintenance)</p>
+      <div class="field-row mb-3" id="pf-phase-offset-rows"></div>
+
+      <p class="muted note-txt mb-2">Protein per kg bodyweight, by phase</p>
+      <div class="field-row mb-3" id="pf-protein-per-kg-rows"></div>
+
+      <button id="pf-nutrition-config-save" class="save-btn" type="button">Save nutrition detail</button>
+      <p class="field-hint" id="pf-nutrition-config-status" role="status" aria-live="polite"></p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3 class="card-title mb-2">Planned times</h3>
+    <div class="table-wrap">
+      <table class="data-table" id="pf-planned-table">
+        <thead>
+          <tr><th>Metric</th><th>Time (HH:MM)</th><th>Tolerance (min)</th><th></th></tr>
+        </thead>
+        <tbody id="pf-planned-body"></tbody>
+      </table>
+    </div>
+    <p class="field-hint" id="pf-planned-status" role="status" aria-live="polite"></p>
+  </div>
+</div>
+
+<div class="toast-wrap" id="toast-wrap" aria-live="polite"></div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/profile.js') }}" defer></script>
+{% endblock %}

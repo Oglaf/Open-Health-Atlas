@@ -311,6 +311,83 @@ def test_health_write_happy_paths_land_in_each_users_own_database(broker_env, tm
                for record in map(json.loads, audit_lines))
 
 
+def test_health_write_profile_and_targets_setters_and_user_profile_merge(broker_env, tmp_path):
+    """Fork 2026-10-29 (docs/PRODUCT_AUTHORITY.md): profile-set/phase-set/
+    nutrition-target-set/planned-time-set and the self-service
+    user-profile-merge patch are reachable through health_write per named
+    user, with the same per-user isolation every other write command gets."""
+    users_root = broker_env["users_root"]
+    alice_db, bob_db = broker_env["dbs"]["alice"], broker_env["dbs"]["bob"]
+
+    # make_demo_db.py seeds owner_profile/nutrition_targets/planned_times for
+    # BOTH fictional users, so isolation is pinned by snapshotting the field
+    # this test does NOT touch for each user and confirming it is unchanged
+    # afterward — not by assuming the row is absent.
+    import sqlite3
+
+    def _row(db, sql):
+        con = sqlite3.connect(db)
+        try:
+            return con.execute(sql).fetchone()
+        finally:
+            con.close()
+
+    alice_phase_before = _row(alice_db, "SELECT value FROM owner_profile WHERE key='phase'")
+    alice_dose_before = _row(alice_db, "SELECT planned, tolerance_min FROM planned_times WHERE metric='dose'")
+    bob_height_before = _row(bob_db, "SELECT value FROM owner_profile WHERE key='height_cm'")
+    bob_kcal_before = _row(bob_db, "SELECT target FROM nutrition_targets WHERE name='kcal'")
+
+    async def exercise():
+        async with stdio_client(_mcp_parameters(
+                tmp_path, users_root, bridge_socket=broker_env["sock"])) as (reader, writer):
+            async with mcp.ClientSession(reader, writer, read_timeout_seconds=timedelta(seconds=30)) as session:
+                await session.initialize()
+
+                profile_set, error = await _call(session, "health_write", _write(
+                    "profile-set", "alice", positional=["height_cm", "180"]))
+                assert not error and profile_set["ok"] is True, json.dumps(profile_set)
+
+                phase_set, error = await _call(session, "health_write", _write(
+                    "phase-set", "bob", positional=["cut"]))
+                assert not error and phase_set["ok"] is True, json.dumps(phase_set)
+
+                target_set, error = await _call(session, "health_write", _write(
+                    "nutrition-target-set", "alice", {"--target": 2200}, positional=["kcal"]))
+                assert not error and target_set["ok"] is True, json.dumps(target_set)
+
+                planned, error = await _call(session, "health_write", _write(
+                    "planned-time-set", "bob", {"--tolerance": 30}, positional=["dose", "08:00"]))
+                assert not error and planned["ok"] is True, json.dumps(planned)
+
+                patch = json.dumps({"HERMES_SIT_REACH_NORMAL_CM": 30})
+                merge, error = await _call(session, "health_write", _write(
+                    "user-profile-merge", "alice", stdin=patch))
+                assert not error and merge["ok"] is True, json.dumps(merge)
+
+                # Unknown user refused, same as every other write command.
+                ghost, error = await _call(session, "health_write", _write(
+                    "user-profile-merge", "ghost", stdin=patch))
+                assert error and ghost["status"] == "refused"
+
+    asyncio.run(exercise())
+
+    # Each write landed in the right user's OWN database — and nothing this
+    # test didn't ask for moved in the OTHER user's database.
+    assert _row(alice_db, "SELECT value FROM owner_profile WHERE key='height_cm'") == ("180",)
+    assert _row(alice_db, "SELECT target FROM nutrition_targets WHERE name='kcal'") == (2200.0,)
+    assert _row(alice_db, "SELECT value FROM owner_profile WHERE key='phase'") == alice_phase_before
+    assert _row(alice_db, "SELECT planned, tolerance_min FROM planned_times WHERE metric='dose'") == alice_dose_before
+
+    assert _row(bob_db, "SELECT value FROM owner_profile WHERE key='phase'") == ("cut",)
+    assert _row(bob_db, "SELECT planned, tolerance_min FROM planned_times WHERE metric='dose'") == ("08:00", 30)
+    assert _row(bob_db, "SELECT value FROM owner_profile WHERE key='height_cm'") == bob_height_before
+    assert _row(bob_db, "SELECT target FROM nutrition_targets WHERE name='kcal'") == bob_kcal_before
+
+    alice_profile = json.loads((users_root / "alice" / "profile.json").read_text())
+    assert alice_profile == {"HERMES_SIT_REACH_NORMAL_CM": 30}
+    assert not (users_root / "bob" / "profile.json").exists()
+
+
 _FICTIONAL_BIA_REPORT = {
     "date": "2026-06-29", "tested_at": "10:30", "device": "Relaxmedic",
     "subject_label": "Fictional Agent", "sex": "male", "age_years": 35,
@@ -490,6 +567,9 @@ def test_exposure_subset_pin_and_derived_flag_sets(tmp_path):
         "routine-undo", "checkin", "day-rating", "write-note", "commitment-set",
         "commitment-list", "log-commitment", "schedule-set", "set-batch", "prep",
         "log-body-composition",
+        "profile-set", "phase-set", "nutrition-target-set", "planned-time-set",
+        "user-profile-merge",
+        "water-add", "supplement-log", "pain-log",
     )
     # Every exposed command exists in the broker's shared declaration and its
     # MCP flag set is exactly the broker's (derived, in sync).
@@ -498,6 +578,9 @@ def test_exposure_subset_pin_and_derived_flag_sets(tmp_path):
         assert command in COMMAND_FLAGS
         assert flags == frozenset(COMMAND_FLAGS[command])
     # The restricted subset never grows into admin or hermesctl territory.
+    # (user-profile-merge is deliberately exposed — SELF_SERVICE_COMMANDS,
+    # not ADMIN_COMMANDS: it only ever targets the calling user's own
+    # profile.json, never a target argument.)
     for forbidden in (*ADMIN_COMMANDS, "hermes-chat", "hermes-model-set",
                       "fitbit-status", "hermes-status", "hermes-spend"):
         assert forbidden not in write_commands
@@ -514,4 +597,32 @@ def test_note_stdin_cap_refused_clientside(tmp_path):
     build, error = mc["build_health_write_request"](
         {"user": "alice", "command": "checkin", "positional": ["mood", "4"],
          "stdin": "smuggled"}, write_commands, "alice")
-    assert build is None and error == "stdin is only accepted for write-note or log-body-composition"
+    assert build is None and error == (
+        "stdin is only accepted for write-note, log-body-composition, "
+        "or user-profile-merge"
+    )
+
+
+def test_health_write_water_add_for_named_user_and_unknown_user_rejected(broker_env, tmp_path):
+    """Fork 2026-10-29 (docs/PRODUCT_AUTHORITY.md "manual daily capture"):
+    water-add is health_write-reachable, per named user, like every other
+    write command — an unknown user is refused opaquely, same as reads."""
+    users_root = broker_env["users_root"]
+    alice_db = broker_env["dbs"]["alice"]
+    before = _digest(alice_db)
+
+    async def exercise():
+        async with stdio_client(_mcp_parameters(
+                tmp_path, users_root, bridge_socket=broker_env["sock"])) as (reader, writer):
+            async with mcp.ClientSession(reader, writer, read_timeout_seconds=timedelta(seconds=30)) as session:
+                await session.initialize()
+                ok, error = await _call(session, "health_write", _write(
+                    "water-add", "alice", {"--date": "2026-06-29"}, positional=["250"]))
+                assert not error and ok["ok"] is True, json.dumps(ok)
+
+                ghost, error = await _call(session, "health_write", _write(
+                    "water-add", "ghost", {}, positional=["250"]))
+                assert error and ghost["status"] == "refused"
+
+    asyncio.run(exercise())
+    assert _digest(alice_db) != before

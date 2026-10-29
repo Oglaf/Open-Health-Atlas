@@ -29,6 +29,8 @@ NAV = [
     ("core.nutrition", "Nutrition", "nutrition"),
     ("core.recovery", "Recovery", "recovery"),
     ("core.data", "Data Explorer", "data"),
+    ("core.daily_log", "Daily log", "dailylog"),
+    ("core.profile", "Profile & targets", "profile"),
 ]
 
 # Shown in the mobile bottom tab bar (the rest live behind "More").
@@ -88,6 +90,7 @@ def create_app(overrides: dict | None = None) -> Flask:
     from app.routes.models import bp as models_bp
     from app.routes.nutrition import bp as nutrition_bp
     from app.routes.plans import bp as plans_bp
+    from app.routes.profile import bp as profile_bp
     from app.routes.training import bp as training_bp
     from app.routes.recovery import bp as recovery_bp
 
@@ -104,6 +107,7 @@ def create_app(overrides: dict | None = None) -> Flask:
     app.register_blueprint(export_bp)
     app.register_blueprint(integrations_bp)
     app.register_blueprint(green_days_bp)
+    app.register_blueprint(profile_bp)
 
     @app.before_request
     def require_login():

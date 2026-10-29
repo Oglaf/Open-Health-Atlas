@@ -158,6 +158,26 @@ def data():
     return render_template("data.html")
 
 
+@bp.get("/log")
+def daily_log():
+    """Daily log (fork owner decision 2026-10-29, docs/PRODUCT_AUTHORITY.md
+    "manual daily capture"): day rating, evening check-in, water, supplements
+    and pain — the previously-empty capture surface behind the Consistency
+    rings, dashboard heatmap and habit streaks. Every write crosses
+    /api/log/* -> the broker, exactly like every other panel write."""
+    return render_template("daily_log.html")
+
+
+@bp.get("/profile")
+def profile():
+    """Self-service Profile & targets (fork owner decision 2026-10-29,
+    docs/PRODUCT_AUTHORITY.md): the logged-in user's own owner_profile/phase/
+    nutrition_targets/planned_times config and (non-owner only) their
+    profile.json nutrition overlay. Open to every logged-in user — this is
+    their own data, unlike /admin."""
+    return render_template("profile.html")
+
+
 
 @bp.get("/admin")
 def admin():

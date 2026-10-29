@@ -114,14 +114,9 @@
         <li>Weight: a body-weight record on or before today.</li>
         <li>Configuration: micronutrient targets, phase offsets and protein targets.</li>
       </ul>
-      <p class="note-txt">Setup currently uses the OpenHealthAtlas command-line toolkit, run by you or a local setup agent you authorize to edit this workspace. A connected read-only MCP client cannot save these values, and this page has no profile editor.</p>
-      <ol class="note-txt">
-        <li>Identify the intended workspace's active <code>health.db</code> and timezone. On the Mac app, use its current database generation, not the original file you imported.</li>
-        <li>Use an OpenHealthAtlas source checkout with its Python dependencies installed. Set <code>HEALTH_DB</code> explicitly to that database and <code>HERMES_TIMEZONE</code> to its timezone for every command; do not rely on the defaults.</li>
-        <li>Use <code>profile-set KEY VALUE</code> for <code>height_cm</code>, <code>sex</code> (male or female), and <code>dob</code> (YYYY-MM-DD). Record weight through the supported <code>log body_metrics</code> command or an importer. Check the nutrition configuration separately if the engine reports it missing.</li>
-        <li>Run <code>nutrition-targets</code> for the same workspace to check the result, then reload this page.</li>
-      </ol>
-      <p class="muted note-txt">Commands are subcommands of <code>python toolkit/health.py</code>. Use <code>--help</code> on a subcommand for its accepted arguments. A local setup agent must have access to the selected workspace and permission to run these tools; ordinary chat access alone is not enough.</p>
+      <p class="note-txt">Set your profile, diet phase, and daily kcal/protein overrides from <a href="{{ url_for('core.profile') }}">Profile &amp; targets</a>. Record weight through the supported <code>log body_metrics</code> command or an importer.</p>
+      <p class="note-txt">Micronutrient targets, phase offsets, and protein-per-kg are also editable from <a href="{{ url_for('core.profile') }}">Profile &amp; targets</a> for a family member account. The bootstrap owner account reads these three from its installation configuration instead (fork owner decision 2026-10-29, docs/PRODUCT_AUTHORITY.md) — set them with the OpenHealthAtlas command-line toolkit's <code>HERMES_NUTRIENT_TARGETS_JSON</code>/<code>HERMES_PHASE_OFFSETS_JSON</code>/<code>HERMES_PROTEIN_PER_KG_JSON</code> environment variables, or ask an admin to create a separate family member account.</p>
+      <p class="muted note-txt">After saving, run <code>nutrition-targets</code> (or just reload this page) to check the result.</p>
     </details>
   </section>
 

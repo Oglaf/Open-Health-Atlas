@@ -2,12 +2,51 @@
 so we assert the exact health.py argv each endpoint produces + input validation."""
 import io
 import json
+import pathlib
+import sqlite3
 
 import pytest
 
 from app import auth as auth_mod
 from app import bridge, create_app
 from app.panel_db import get_db
+
+SCHEMA = (pathlib.Path(__file__).resolve().parent.parent / "toolkit" / "SCHEMA.sql").read_text()
+
+
+@pytest.fixture()
+def db_client(tmp_path, monkeypatch):
+    """Like `client`, plus a real (empty, schema'd) health.db so the Daily
+    log page's GET state routes (db_read) have something to answer from."""
+    hdb = tmp_path / "health.db"
+    con = sqlite3.connect(hdb)
+    con.executescript(SCHEMA)
+    con.commit()
+    con.close()
+    calls = []
+    stdins = []
+
+    def fake_run(subcmd, *args, **kw):
+        calls.append((subcmd, list(args)))
+        stdins.append(kw.get("stdin"))
+        if subcmd == "commitment-list":
+            return {"commitments": []}
+        return {"ok": True}
+
+    monkeypatch.setattr(bridge, "run", fake_run)
+    app = create_app({
+        "TESTING": True, "WTF_CSRF_ENABLED": False, "RATELIMIT_ENABLED": False,
+        "PANEL_DB": str(tmp_path / "panel.db"), "PANEL_COOKIE_SECURE": False,
+        "HEALTH_DB": str(hdb),
+    })
+    c = app.test_client()
+    with app.app_context():
+        token = auth_mod.create_session()
+    c.set_cookie(auth_mod.SESSION_COOKIE, token)
+    c.calls = calls
+    c.stdins = stdins
+    c.hdb = hdb
+    return c
 
 
 @pytest.fixture()
@@ -49,6 +88,47 @@ def test_day_rating(client):
 def test_day_rating_rejects_bad_value(client):
     assert client.post("/api/log/day-rating", json={"value": "purple"}).status_code == 400
     assert client.calls == []  # never reached the bridge
+
+
+def test_day_rating_with_date(client):
+    r = client.post("/api/log/day-rating", json={"value": "yellow", "date": "2026-10-20"})
+    assert r.status_code == 200
+    assert client.calls[-1] == ("day-rating", ["yellow", "--date", "2026-10-20", "--source", "panel-ui"])
+
+
+def test_day_rating_rejects_future_and_too_old_dates(client):
+    assert client.post("/api/log/day-rating",
+                       json={"value": "green", "date": "2099-01-01"}).status_code == 400
+    assert client.post("/api/log/day-rating",
+                       json={"value": "green", "date": "2026-09-01"}).status_code == 400
+    assert client.post("/api/log/day-rating",
+                       json={"value": "green", "date": "not-a-date"}).status_code == 400
+    assert client.calls == []
+
+
+def test_day_state_requires_auth(tmp_path):
+    app = create_app({"TESTING": True, "WTF_CSRF_ENABLED": False, "RATELIMIT_ENABLED": False,
+                      "PANEL_DB": str(tmp_path / "p.db"), "PANEL_COOKIE_SECURE": False})
+    assert app.test_client().get("/api/log/day").status_code == 401
+
+
+def test_day_state_reads_todays_rating_then_a_backdated_one(db_client):
+    r = db_client.get("/api/log/day")
+    assert r.status_code == 200
+    d = r.get_json()
+    assert d["ok"] is True and d["day_rating"] is None
+
+    con = sqlite3.connect(db_client.hdb)
+    con.execute("INSERT INTO subjective_daily(date, day_rating) VALUES ('2026-10-20', 2)")
+    con.commit()
+    con.close()
+    r = db_client.get("/api/log/day?date=2026-10-20")
+    assert r.get_json() == {"ok": True, "date": "2026-10-20", "day_rating": 2}
+
+
+def test_day_state_rejects_future_and_too_old_dates(db_client):
+    assert db_client.get("/api/log/day?date=2099-01-01").status_code == 400
+    assert db_client.get("/api/log/day?date=2026-09-01").status_code == 400
 
 
 def test_vitals_maps_to_health_py(client):
@@ -125,8 +205,24 @@ def test_body(client):
 
 
 def test_water(client):
-    client.post("/api/log/water", json={"water_ml": 1500})
-    assert client.calls[-1] == ("log", ["intake", "water_ml=1500.0"])
+    """water-add is ADDITIVE, unlike the generic `log intake` writer which
+    replaces the day's total — this route must call water-add, not log."""
+    client.post("/api/log/water", json={"water_ml": 250})
+    assert client.calls[-1] == ("water-add", ["250"])
+
+
+def test_water_with_date(client):
+    client.post("/api/log/water", json={"water_ml": 500, "date": "2026-10-20"})
+    assert client.calls[-1] == ("water-add", ["500", "--date", "2026-10-20"])
+
+
+def test_water_rejects_bad_values(client):
+    assert client.post("/api/log/water", json={"water_ml": 0}).status_code == 400
+    assert client.post("/api/log/water", json={"water_ml": 3001}).status_code == 400
+    assert client.post("/api/log/water", json={"water_ml": 250.5}).status_code == 400
+    assert client.post("/api/log/water", json={"water_ml": 250, "date": "2099-01-01"}).status_code == 400
+    assert client.post("/api/log/water", json={"water_ml": 250, "date": "2026-09-01"}).status_code == 400
+    assert client.calls == []
 
 
 HEVY_CSV_BYTES = (
@@ -298,6 +394,66 @@ def test_word_rejects_bad_status_and_long_why(client):
     assert client.calls == []
 
 
+def test_word_with_commitment_id(client):
+    r = client.post("/api/log/word", json={"status": "kept", "commitment_id": 3})
+    assert r.status_code == 200
+    assert client.calls[-1] == ("log-commitment", ["kept", "--id", "3", "--source", "panel-ui"])
+    assert client.post("/api/log/word",
+                       json={"status": "kept", "commitment_id": -1}).status_code == 400
+    assert client.post("/api/log/word",
+                       json={"status": "kept", "commitment_id": 1.5}).status_code == 400
+
+
+def test_commitment_set_maps_to_commitment_set(client):
+    r = client.post("/api/log/commitment", json={
+        "name": "no-scroll", "identity": "a focused person",
+        "trigger": "picking up my phone", "floor": "name it out loud",
+    })
+    assert r.status_code == 200
+    assert client.calls[-1] == ("commitment-set", [
+        "no-scroll", "--identity", "a focused person",
+        "--trigger", "picking up my phone", "--floor", "name it out loud",
+    ])
+
+
+def test_commitment_set_requires_name(client):
+    assert client.post("/api/log/commitment", json={}).status_code == 400
+    assert client.post("/api/log/commitment", json={"name": "  "}).status_code == 400
+    assert client.calls == []
+
+
+def test_evening_state_requires_auth(tmp_path):
+    app = create_app({"TESTING": True, "WTF_CSRF_ENABLED": False, "RATELIMIT_ENABLED": False,
+                      "PANEL_DB": str(tmp_path / "p.db"), "PANEL_COOKIE_SECURE": False})
+    assert app.test_client().get("/api/log/evening").status_code == 401
+
+
+def test_evening_state_empty_then_populated(db_client):
+    r = db_client.get("/api/log/evening")
+    assert r.status_code == 200
+    d = r.get_json()
+    assert d["word"] is None and d["checkins"] == {} and d["commitments"] == []
+
+    from app import canon
+    con = sqlite3.connect(db_client.hdb)
+    today = canon.today_iso()
+    con.execute("INSERT INTO commitments_log(date, commitment_id, status, why)"
+               " VALUES (?, 0, 'kept', 'stayed off my phone')", (today,))
+    con.execute("INSERT INTO checkins(date, time, kind, value) VALUES (?, '21:00', 'mood', 4)",
+               (today,))
+    con.commit()
+    con.close()
+    r = db_client.get("/api/log/evening")
+    d = r.get_json()
+    assert d["word"] == {"status": "kept", "why": "stayed off my phone"}
+    assert d["checkins"] == {"mood": 4}
+
+
+def test_evening_state_rejects_bad_commitment_id(db_client):
+    assert db_client.get("/api/log/evening?commitment_id=-1").status_code == 400
+    assert db_client.get("/api/log/evening?commitment_id=abc").status_code == 400
+
+
 def test_checkin_maps_and_validates(client):
     r = client.post("/api/log/checkin", json={"kind": "energy", "value": 4})
     assert r.status_code == 200
@@ -305,3 +461,98 @@ def test_checkin_maps_and_validates(client):
     assert client.post("/api/log/checkin", json={"kind": "vibes", "value": 3}).status_code == 400
     assert client.post("/api/log/checkin", json={"kind": "focus", "value": 6}).status_code == 400
     assert client.post("/api/log/checkin", json={"kind": "focus", "value": 3.5}).status_code == 400
+
+
+def test_supplement_maps_to_supplement_log(client):
+    r = client.post("/api/log/supplement", json={
+        "supplement": "creatine", "taken": 1, "dose": 5, "time": "08:00",
+        "date": "2026-10-20", "note": "with breakfast",
+    })
+    assert r.status_code == 200
+    assert client.calls[-1] == ("supplement-log", [
+        "creatine", "--taken", "1", "--dose", "5.0", "--time", "08:00",
+        "--date", "2026-10-20", "--note", "with breakfast", "--source", "manual",
+    ])
+
+
+def test_supplement_minimal_call(client):
+    r = client.post("/api/log/supplement", json={"supplement": "zinc"})
+    assert r.status_code == 200
+    assert client.calls[-1] == ("supplement-log", ["zinc", "--source", "manual"])
+
+
+def test_supplement_rejects_bad_values(client):
+    assert client.post("/api/log/supplement", json={}).status_code == 400
+    assert client.post("/api/log/supplement",
+                       json={"supplement": "zinc", "taken": 2}).status_code == 400
+    assert client.post("/api/log/supplement",
+                       json={"supplement": "zinc", "dose": "nope"}).status_code == 400
+    assert client.post("/api/log/supplement",
+                       json={"supplement": "zinc", "time": "25:00"}).status_code == 400
+    assert client.post("/api/log/supplement",
+                       json={"supplement": "zinc", "note": "x" * 2001}).status_code == 400
+    assert client.calls == []
+
+
+def test_pain_catalog_exposes_toolkit_enums(client):
+    r = client.get("/api/log/pain-catalog")
+    assert r.status_code == 200
+    d = r.get_json()
+    assert "low-back" in d["regions"]
+    assert set(d["sides"]) >= {"left", "right", "central"}
+    assert d["intensity_min"] == 0 and d["intensity_max"] == 10
+
+
+def test_pain_maps_to_pain_log(client):
+    r = client.post("/api/log/pain", json={
+        "region": "low-back", "intensity": 4, "side": "left", "quality": "ache",
+        "pattern": "morning", "flags": ["night-pain"], "date": "2026-10-20",
+        "note": "stiff on waking",
+    })
+    assert r.status_code == 200
+    assert client.calls[-1] == ("pain-log", [
+        "low-back", "--intensity", "4", "--side", "left", "--quality", "ache",
+        "--pattern", "morning", "--flags", "night-pain", "--date", "2026-10-20",
+        "--note", "stiff on waking", "--source", "manual",
+    ])
+
+
+def test_pain_minimal_call(client):
+    r = client.post("/api/log/pain", json={"region": "shoulder", "intensity": 0})
+    assert r.status_code == 200
+    assert client.calls[-1] == ("pain-log", ["shoulder", "--intensity", "0", "--source", "manual"])
+
+
+def test_pain_rejects_bad_values(client):
+    assert client.post("/api/log/pain", json={"region": "elbow", "intensity": 4}).status_code == 400
+    assert client.post("/api/log/pain", json={"region": "low-back"}).status_code == 400
+    assert client.post("/api/log/pain",
+                       json={"region": "low-back", "intensity": 11}).status_code == 400
+    assert client.post("/api/log/pain",
+                       json={"region": "low-back", "intensity": 4, "side": "top"}).status_code == 400
+    assert client.post("/api/log/pain", json={
+        "region": "low-back", "intensity": 4, "flags": ["not-a-flag"],
+    }).status_code == 400
+    assert client.calls == []
+
+
+def test_pain_recent_requires_auth(tmp_path):
+    app = create_app({"TESTING": True, "WTF_CSRF_ENABLED": False, "RATELIMIT_ENABLED": False,
+                      "PANEL_DB": str(tmp_path / "p.db"), "PANEL_COOKIE_SECURE": False})
+    assert app.test_client().get("/api/log/pain-recent").status_code == 401
+
+
+def test_pain_recent_empty_then_populated(db_client):
+    r = db_client.get("/api/log/pain-recent")
+    assert r.status_code == 200 and r.get_json()["items"] == []
+
+    con = sqlite3.connect(db_client.hdb)
+    con.execute("INSERT INTO pain_log(date, region, side, intensity, source)"
+               " VALUES ('2026-10-20', 'low-back', 'left', 4, 'manual')")
+    con.execute("INSERT INTO pain_log(date, region, side, intensity, source, voided)"
+               " VALUES ('2026-10-19', 'shoulder', 'right', 2, 'manual', 1)")
+    con.commit()
+    con.close()
+    r = db_client.get("/api/log/pain-recent")
+    items = r.get_json()["items"]
+    assert len(items) == 1 and items[0]["region"] == "low-back"  # voided row excluded

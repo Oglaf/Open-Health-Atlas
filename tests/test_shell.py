@@ -15,7 +15,7 @@ def test_dashboard_renders(authed):
     assert "OpenHealthAtlas" in html
     # Navigation contract. Order lives in app/__init__.py NAV.
     for item in ("Dashboard", "Consistency", "Body", "Nutrition",
-                 "Recovery", "Data Explorer"):
+                 "Recovery", "Data Explorer", "Daily log", "Profile &amp; targets"):
         assert item in html, f"nav item {item} missing from shell"
     # Mind, External care, Labs and Insight Explorer were removed from this
     # fork (owner decision, 2026-10-28 — see docs/PRODUCT_AUTHORITY.md).
@@ -32,7 +32,7 @@ def test_dashboard_renders(authed):
 
 def test_stub_pages_render(authed):
     for path in ("/training", "/nutrition", "/export",
-                 "/vault-notes", "/consistency", "/data", "/models"):
+                 "/vault-notes", "/consistency", "/data", "/models", "/log", "/profile"):
         r = authed.get(path)
         assert r.status_code == 200, f"{path} did not render"
 
