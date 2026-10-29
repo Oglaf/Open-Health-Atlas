@@ -50,10 +50,10 @@
     const appleBit = apple.since
       ? `Apple: retired ${apple.since} · archive imports occasionally`
       : "Apple: retired";
-    const sub = `${appleBit} · Fitbit: ${w.fitbit_latest || "no data"}` +
+    const sub = `${appleBit} · Fitbit data through ${w.fitbit_latest || "— (none yet)"}` +
       (w.collector_last_run
-        ? ` · collector ${w.collector_last_run}`
-        : " · no sync yet — the collector container pushes data");
+        ? ` · collector ran ${w.collector_last_run}`
+        : " · the collector has not run yet");
     return row("Wearable", syncChip(w.status, w.latest_date), FLAG_CLASS[w.status] || "bd", sub);
   }
 

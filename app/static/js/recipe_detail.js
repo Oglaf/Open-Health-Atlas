@@ -137,7 +137,7 @@
     const macros = d.macros || [];
     if (!macros.length || macros.every((m) => m.amount == null)) {
       macroEl.innerHTML = '<p class="muted note-txt m0">Macros pending — this recipe has no batch ' +
-        "weight set yet, so per-portion amounts can't be computed. Set it via the coach's " +
+        "weight set yet, so per-portion amounts can't be computed. Set it with the " +
         "<code>set-batch</code>.</p>";
     } else {
       // var() strings, not resolved colors — the browser re-themes them automatically
@@ -177,7 +177,7 @@
     note.className = "muted note-txt mt-2 m0";
     note.textContent = t.status === "ok"
       ? "Amounts per portion · % = share of your daily target (targets engine); — = no target for that nutrient."
-      : "Amounts per portion. % of daily target needs your profile (set via the coach).";
+      : "Amounts per portion. % of daily target needs your profile (set in your profile).";
     microEl.replaceChildren(list, note);
   }
 

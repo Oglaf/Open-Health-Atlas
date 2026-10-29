@@ -113,7 +113,7 @@
     try { result = (await fetchJSON(`/api/insights/adherence?days=${days}`)).result; }
     catch (e) { empty("cons-adh", "Engine unavailable: " + e.message); return; }
     if (result.insufficient_data) {
-      empty("cons-adh", "Not enough word logs yet — the nightly kept/partly/broke tap builds this.");
+      empty("cons-adh", "Not enough word logs yet — recorded kept/partly/broke answers build this.");
       document.getElementById("adh-meta2").textContent = `${result.days_logged ?? 0} days logged`;
       return;
     }
@@ -150,9 +150,7 @@
     tbody.replaceChildren();
     emptyEl.hidden = true;
     table.hidden = true;
-    meta.textContent = "aggregates computed in SQL" +
-      (days === "all" ? " · all time" : ` · last ${days} days`) +
-      " · streaks written by health.py";
+    meta.textContent = days === "all" ? "all time" : `last ${days} days`;
     let rows;
     try { rows = (await fetchJSON(`/api/dash/habits-ledger?days=${days}`)).rows || []; }
     catch (e) {
@@ -162,7 +160,7 @@
     }
     if (!rows.length) {
       emptyEl.textContent =
-        "No habit logs yet — the coach loop's evening check-in writes them.";
+        "No habit logs yet — evening check-ins recorded through your MCP client appear here.";
       emptyEl.hidden = false;
       return;
     }

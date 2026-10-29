@@ -817,3 +817,19 @@ def test_recovery_detail_hrv_works_on_legacy_and_new_schema(tmp_path):
     assert d2["empty"] is False
     names2 = [r["name"] for r in d2["breakdown"]]
     assert "Latest" in names2
+
+
+# Fork 2026-10-29: the Consistency + Dashboard pages read these two engine
+# endpoints; they were 404'ing after the Insight Explorer removal.
+def test_insights_adherence_and_coverage_routes(dash_client, monkeypatch):
+    from app import bridge
+    calls = []
+    monkeypatch.setattr(bridge, "run", lambda *a, **k: calls.append(a) or {"ok": True})
+    r = dash_client.get("/api/insights/adherence?days=365")
+    assert r.status_code == 200 and r.get_json()["ok"] is True
+    assert calls[-1] == ("adherence", "--days", "365")
+    assert dash_client.get("/api/insights/adherence").status_code == 200
+    assert calls[-1] == ("adherence", "--days", "90")
+    assert dash_client.get("/api/insights/adherence?days=7; rm").status_code == 400
+    assert dash_client.get("/api/insights/coverage").status_code == 200
+    assert calls[-1] == ("data-coverage", "--days", "90")

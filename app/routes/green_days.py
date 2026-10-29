@@ -219,3 +219,37 @@ def _dashboard_green_days_request():
     return (argv, scope, fixture_socket), None
 
 
+
+
+# Fork 2026-10-29: two small read-only engine reads the Consistency and
+# Dashboard pages still call. They lived in the removed insights module; the
+# removal accidentally 404'd them ("Engine unavailable: HTTP 404").
+ADHERENCE_ALLOWED_DAYS = {"1": 1, "7": 7, "30": 30, "90": 90, "365": 365, "all": 0}
+
+
+def _engine(subcmd, *args, timeout=75.0):
+    """Run a read-only engine command; engine JSON passes through untouched."""
+    try:
+        return jsonify(ok=True, result=bridge.run(subcmd, *args, timeout=timeout))
+    except bridge.BridgeError as exc:
+        if exc.code is not None:
+            return jsonify(ok=False, error={"code": exc.code, "message": str(exc)}), 502
+        return jsonify(ok=False, error=str(exc)), 502
+
+
+@bp.get("/adherence")
+def adherence():
+    """Follow-through trend; `days` is optional and whitelisted."""
+    rng = request.args.get("days")
+    if rng is None:
+        days = 90
+    elif rng in ADHERENCE_ALLOWED_DAYS:
+        days = ADHERENCE_ALLOWED_DAYS[rng]
+    else:
+        return jsonify(error="days must be one of 1, 7, 30, 90, 365, all"), 400
+    return _engine("adherence", "--days", str(days))
+
+
+@bp.get("/coverage")
+def coverage():
+    return _engine("data-coverage", "--days", "90")

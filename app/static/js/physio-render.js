@@ -33,7 +33,7 @@
     const body = document.getElementById("mf-loop-body");
     if (!loop.length) {
       body.replaceChildren(el("p", "muted note-txt m0",
-        "No pain logged in this window. Tell the coach if something hurts — the figure and this card stay read-only."));
+        "No pain logged in this window. Record pain through your MCP client — the figure and this card stay read-only."));
       return;
     }
     body.replaceChildren(...loop.map((area) => {

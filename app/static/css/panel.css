@@ -1142,7 +1142,9 @@ table.ltab tr:last-child td { border-bottom: 0; }
   grid-template-columns: repeat(2, 1fr);
 }
 @media (min-width: 700px)  { .sats { grid-template-columns: repeat(3, 1fr); } }
-@media (min-width: 1100px) { .sats { grid-template-columns: repeat(5, 1fr); } }
+/* fork 2026-10-29: only Body · Nutrition · Recovery rings remain (3), not 5 */
+/* 3 rings spread across the strip (flex:1 on .scores-strip .sats) */
+#cons-chips:empty { display: none; }
 .sat { text-align: center; cursor: pointer; color: inherit; }
 .sat .ring-wrap { width: 84px; margin: 0 auto 6px; }
 .sat .ring-score { font-size: 1.25rem; font-weight: 700; text-shadow: none; }
@@ -1480,3 +1482,10 @@ table.ltab tr:last-child td { border-bottom: 0; }
 .dash-sleep-card { display: flex; flex-direction: column; }
 .dash-sleep-card #dash-sleep { flex: 1; min-height: 230px; }
 .dash-sleep-average { font-size: 28px; }
+
+/* Data page (fork 2026-10-29): sections of even grids; a card can span both
+   columns; cards keep their natural height so an empty (collapsed) chart
+   never stretches into a tall blank box. */
+.data-sec { gap: var(--sp-4, 16px); }
+.data-grid { align-items: start; }
+@media (min-width: 900px) { .grid-2 > .card.full { grid-column: 1 / -1; } }

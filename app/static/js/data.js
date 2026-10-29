@@ -19,13 +19,19 @@
     const el = document.getElementById(id);
     if (!el) return null;
     if (charts[id]) charts[id].dispose();
+    el.style.height = "";   // undo the empty-state collapse when data arrives
     charts[id] = echarts.init(el);
     return charts[id];
   }
 
+  // Empty charts collapse to a short strip so a sparse account doesn't render
+  // a wall of 230px blank cards.
   function empty(id, label) {
     const c = chart(id);
-    if (c) c.setOption({ graphic: { type: "text", left: "center", top: "middle",
+    if (!c) return;
+    document.getElementById(id).style.height = "84px";
+    c.resize();
+    c.setOption({ graphic: { type: "text", left: "center", top: "middle",
       style: { text: label || "No data yet", fill: pal().muted, fontSize: 13 } } });
   }
 

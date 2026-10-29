@@ -3,7 +3,7 @@
 {% block content %}
 {# Body (design v-body): analysis view — muscle radar,
    ratios, V-taper, weight, quarter battery, per-lift progression. Set capture
-   lives in the Telegram loop. All numbers come from health.py endpoints;
+   comes from Hevy CSV import and MCP. All numbers come from health.py endpoints;
    nothing is computed here. The training-program editor joins this page when
    the Plans page dissolves into Settings (nav flip). #}
 <div class="vstack body-page">
@@ -95,19 +95,28 @@
            click targets now (wired in training.js via radar triggerEvent) —
            the chip row is gone; same /training/muscle/<group> destinations. #}
       </div>
+
+      {# Fork 2026-10-29: V-taper moved here so the right column sits beside the
+         tall body-map card instead of leaving a hole under the radar. #}
+      <div class="card center">
+        <h3 class="card-title">V-taper <span class="muted micro">waist ÷ chest</span></h3>
+        <div id="ch-vtaper" class="gauge-sm"></div>
+        <div class="muted micro" id="vtaper-current">Loading…</div>
+        <p class="muted micro m0" id="vtaper-note"></p>
+      </div>
     </div>
   </div>
 
   {# §3g Phase 3: the physio-loop side card — READ-ONLY. Shown by training.js
      only when the Pain lens is active. Every candidate cause, self-test, drill,
      citation and boundary line is rendered from the engine's `muscle-map
-     --lens pain` payload VERBATIM (determinism law). Pain is reported by
-     telling the coach, never a panel form — there are no inputs here. #}
+     --lens pain` payload VERBATIM (determinism law). Pain is reported
+     through the MCP client — there are no inputs here. #}
   <div class="card" id="mf-loop" hidden>
     <div class="row between wrap">
       <div>
         <h3 class="card-title">Pain &amp; physio loop</h3>
-        <div class="muted micro">cited candidate patterns · report pain by telling the coach</div>
+        <div class="muted micro">cited candidate patterns · report pain through your MCP client</div>
       </div>
       <span class="chip" id="mf-loop-count"></span>
     </div>
@@ -116,19 +125,10 @@
     <p class="muted micro m0 mt-3 pt-3 hair-top" id="mf-cv"></p>
   </div>
 
-  <div class="grid-3">
-    <div class="card center">
-      <h3 class="card-title">V-taper <span class="muted micro">waist ÷ chest</span></h3>
-      <div id="ch-vtaper" class="gauge-sm"></div>
-      <div class="muted micro" id="vtaper-current">Loading…</div>
-      <p class="muted micro m0" id="vtaper-note"></p>
-    </div>
-    <div class="card">
-      <h3 class="card-title">Weight</h3>
-      <div id="ch-weight" class="h170"></div>
-      <div class="muted micro center" id="weight-cap"></div>
-    </div>
-  </div>
+  <div class="card">
+    <h3 class="card-title">Weight</h3>
+    <div id="ch-weight" class="h230"></div>
+    <div class="muted micro center" id="weight-cap"></div>
   </div>
 
   <div class="card">

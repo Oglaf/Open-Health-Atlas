@@ -4,7 +4,6 @@
 {# Consistency pillar (design v-consistency): kept-word ring (engine score),
    habit streaks + per-habit ledger (habits_log aggregates, SQL-side),
    follow-through trend (engine adherence), 12-month day-ratings calendar.
-   XP / levels are an honest placeholder — the game engine isn't built yet.
    Header range dd windows the ledger + follow-through cards (server-side
    `days` param); the calendar stays a fixed 12-month view — a deliberate
    divergence from the design's mock (which varies calendar granularity per
@@ -28,9 +27,7 @@
     </div>
   </div>
 
-  <div class="row gap-2 wrap" id="cons-chips">
-    <span class="chip muted">XP · levels — pending the game engine (habits.md rules)</span>
-  </div>
+  <div class="row gap-2 wrap" id="cons-chips"></div>
 
   <div class="grid-3">
     <div class="card center">
@@ -43,7 +40,7 @@
         <span class="chip">per-habit ledger below</span>
       </div>
       <div class="vstack gap-2" id="cons-streaks">
-        <span class="muted note-txt">Habit streaks appear when the coach loop logs them.</span>
+        <span class="muted note-txt">No habit logs yet. Streaks appear once evening check-ins are recorded (through your MCP client).</span>
       </div>
     </div>
   </div>
@@ -64,7 +61,7 @@
     <div class="row between wrap mb-2">
       <h3 class="card-title">Habit ledger</h3>
       <div class="row gap-2">
-        <span class="muted micro" id="ledger-meta">aggregates computed in SQL · streaks written by health.py</span>
+        <span class="muted micro" id="ledger-meta">recorded habit days</span>
         <span class="chip">all ›</span>
       </div>
     </div>
@@ -86,7 +83,7 @@
     </div>
     <div id="cons-heat" class="h180"></div>
     <div class="row between wrap mt-1">
-      <span class="muted micro">cells summarize logged days · from the evening check-in</span>
+      <span class="muted micro">cells summarize your logged day ratings</span>
       <a class="muted micro klink" href="{{ url_for('core.data') }}">open recorded trends →</a>
     </div>
   </div>

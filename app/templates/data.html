@@ -55,118 +55,37 @@
         {# Filters which cards are visible by pillar — purely client-side
            (data for every card is already loaded), composes with range/source
            above. Mapping: Body = body-composition/activity, Recovery =
-           sleep/HR/HRV, Environment = the activity feed (not a pillar;
-           page-local context). Fork 2026-10-28: Mind removed with its cards. #}
+           sleep/HR/HRV, Activity = steps/energy/water/training volume + the
+           recent-writes feed. Fork 2026-10-28: Mind removed with its cards. #}
         <div class="dd" data-dd="category">
           <button class="ddbtn" type="button">All <span class="cv">▾</span></button>
           <div class="ddmenu">
             <button type="button" data-val="All" class="on">All</button>
             <button type="button" data-val="Body">Body</button>
             <button type="button" data-val="Recovery">Recovery</button>
-            <button type="button" data-val="Environment">Environment</button>
+            <button type="button" data-val="Activity">Activity</button>
           </div>
         </div>
       </div>
     </div>
   </div>
 
-  <div class="grid-2">
-    <div class="card" data-cat="recovery">
-      <h3 class="card-title">Resting HR <span class="muted micro">bpm</span></h3>
-      <div id="ch-rhr" class="h230"></div>
-    </div>
-    <div class="card" data-cat="recovery">
-      {# T55 flag 2: same column, two algorithms — apple=SDNN, fitbit=RMSSD
-         (see toolkit/SCHEMA.sql daily_metrics.hrv_ms) — so the caption is
-         algorithm-honest; the source filter above compares like with like. #}
-      <h3 class="card-title">HRV <span class="muted micro">ms · SDNN/RMSSD varies by source</span></h3>
-      <div id="ch-hrv" class="h230"></div>
-    </div>
-    <div class="card" data-cat="recovery">
-      <h3 class="card-title">Sleep <span class="muted micro">h</span></h3>
-      <div id="ch-sleep" class="h230"></div>
-    </div>
-    <div class="card" data-cat="body">
-      <h3 class="card-title">Steps</h3>
-      <div id="ch-steps" class="h230"></div>
-    </div>
-    <div class="card" data-cat="body">
-      <h3 class="card-title">Weight &amp; waist <span class="muted micro">kg / cm</span></h3>
-      <div id="ch-body" class="h230"></div>
-    </div>
-  </div>
-
-  {# task-52: raw-data gallery — every remaining daily_metrics/body_metrics/
-     sleep_log/intake/workouts/hevy_sets/subjective_daily
-     column gets its own chart (owner: "each of them has their own graph...
-     not everything is a line"; fork 2026-10-28: weather/air-quality/
-     medication/mood cards removed — owner decision, see
-     docs/PRODUCT_AUTHORITY.md). Grouped only where the existing convention
-     already combines one measurement family (weight+waist above; hr min/avg/
-     max and the 5 tape measurements below). Category buckets match the
-     dropdown above. #}
-  <div class="grid-2">
-    <div class="card" data-cat="recovery">
-      <h3 class="card-title">Heart rate range <span class="muted micro">bpm · min/avg/max</span></h3>
-      <div id="ch-hrrange" class="h230"></div>
-    </div>
-    <div class="card" data-cat="recovery">
-      <h3 class="card-title">Respiratory rate <span class="muted micro">breaths/min</span></h3>
-      <div id="ch-resp" class="h230"></div>
-    </div>
-    <div class="card" data-cat="recovery">
-      <h3 class="card-title">SpO2 <span class="muted micro">%</span></h3>
-      <div id="ch-spo2" class="h230"></div>
-    </div>
-    <div class="card" data-cat="recovery">
-      <h3 class="card-title">Walking HR avg <span class="muted micro">bpm</span></h3>
-      <div id="ch-walkhr" class="h230"></div>
-    </div>
-    <div class="card" data-cat="body">
-      <h3 class="card-title">Active energy <span class="muted micro">kcal</span></h3>
-      <div id="ch-activekcal" class="h230"></div>
-    </div>
-    <div class="card" data-cat="body">
-      <h3 class="card-title">Basal energy <span class="muted micro">kcal</span></h3>
-      <div id="ch-basalkcal" class="h230"></div>
-    </div>
-    <div class="card" data-cat="body">
-      <h3 class="card-title">Exercise minutes <span class="muted micro">min</span></h3>
-      <div id="ch-exercise" class="h230"></div>
-    </div>
-    <div class="card" data-cat="body">
-      <h3 class="card-title">Distance <span class="muted micro">km</span></h3>
-      <div id="ch-distance" class="h230"></div>
-    </div>
-    <div class="card" data-cat="body">
-      <h3 class="card-title">Flights climbed</h3>
-      <div id="ch-flights" class="h230"></div>
-    </div>
-    <div class="card" data-cat="body">
-      <h3 class="card-title">Body fat % <span class="muted micro">%</span></h3>
-      <div id="ch-bodyfat" class="h230"></div>
-    </div>
-    <div class="card" data-cat="mind">
-      <h3 class="card-title">Day rating <span class="muted micro">1–3</span></h3>
-      <div id="ch-dayrating" class="h230"></div>
-    </div>
-  </div>
-
-  <div class="card" data-cat="body">
-    <h3 class="card-title">Measurements <span class="muted micro">cm</span></h3>
-    <div id="ch-measurements" class="h300"></div>
-  </div>
-
+  {# Fork 2026-10-29: the page is regrouped into Body / Recovery / Activity
+     sections, each an even grid, so removing a card never leaves an orphan
+     hole (the old flat grid had two). Empty charts collapse to a short strip
+     (data.js empty()). Category filter hides whole sections. #}
+  <section class="vstack data-sec" data-cat="body">
+    <h2 class="disp t20 m0">Body</h2>
   {# §body-composition: multi-frequency BIA scan (fork owner decision
      2026-10-27, docs/PRODUCT_AUTHORITY.md). health.py's `body-composition`
      read command (via /api/dash/body-composition) supplies every number;
      this card only renders it. #}
-  <div class="card" data-cat="body">
+  <div class="card">
     <div class="row between wrap mb-2">
       <h3 class="card-title">Body composition <span class="muted micro">multi-frequency BIA scan</span></h3>
       <span class="muted micro" id="bc-meta">—</span>
     </div>
-    <p class="muted note-txt" id="bc-empty" hidden>No body composition scan logged yet — paste one below.</p>
+    <p class="muted note-txt" id="bc-empty" hidden>No body composition scan recorded yet — add one through your MCP client (log-body-composition).</p>
     <div id="bc-body" hidden>
       <div class="row gap-3 wrap mb-2">
         <div class="kv"><span class="n" id="bc-score">—</span><span class="u">body score / 100</span></div>
@@ -218,44 +137,124 @@
     </div>
   </div>
 
-  <div class="grid-2" data-cat="body">
+    <div class="grid-2 data-grid">
     <div class="card">
-      <h3 class="card-title">Body composition — skeletal muscle <span class="muted micro">kg</span></h3>
+      <h3 class="card-title">Skeletal muscle (BIA scans) <span class="muted micro">kg</span></h3>
       <div id="ch-bc-muscle" class="h230"></div>
     </div>
     <div class="card">
-      <h3 class="card-title">Body composition — visceral fat grade</h3>
+      <h3 class="card-title">Visceral fat grade (BIA scans)</h3>
       <div id="ch-bc-visceral" class="h230"></div>
     </div>
-  </div>
-
-  {# fork 2026-10-28: the manual "Log a body composition scan" paste form
-     was removed (owner decision — scans come from the CLI / MCP
-     log-body-composition path); the BIA display cards above stay. #}
-
-  <div class="grid-2">
-    <div class="card" data-cat="recovery">
-      <h3 class="card-title">Sleep stages <span class="muted micro">sleep_log</span></h3>
-      <div id="ch-sleepstages" class="h230"></div>
     </div>
-    <div class="card" data-cat="recovery">
-      <h3 class="card-title">Time asleep <span class="muted micro">h · sleep_log</span></h3>
+
+    <div class="grid-2 data-grid">
+    <div class="card">
+      <h3 class="card-title">Weight &amp; waist <span class="muted micro">kg / cm</span></h3>
+      <div id="ch-body" class="h230"></div>
+    </div>
+    <div class="card">
+      <h3 class="card-title">Body fat <span class="muted micro">%</span></h3>
+      <div id="ch-bodyfat" class="h230"></div>
+    </div>
+    <div class="card full">
+      <h3 class="card-title">Measurements <span class="muted micro">cm</span></h3>
+      <div id="ch-measurements" class="h300"></div>
+    </div>
+    </div>
+  </section>
+
+  <section class="vstack data-sec" data-cat="recovery">
+    <h2 class="disp t20 m0">Recovery</h2>
+    <div class="grid-2 data-grid">
+    <div class="card">
+      <h3 class="card-title">Resting HR <span class="muted micro">bpm</span></h3>
+      <div id="ch-rhr" class="h230"></div>
+    </div>
+    <div class="card">
+      {# T55 flag 2: same column, two algorithms — apple=SDNN, fitbit=RMSSD
+         (see toolkit/SCHEMA.sql daily_metrics.hrv_ms) — so the caption is
+         algorithm-honest; the source filter above compares like with like. #}
+      <h3 class="card-title">HRV <span class="muted micro">ms · SDNN/RMSSD varies by source</span></h3>
+      <div id="ch-hrv" class="h230"></div>
+    </div>
+    <div class="card">
+      <h3 class="card-title">Sleep <span class="muted micro">h</span></h3>
+      <div id="ch-sleep" class="h230"></div>
+    </div>
+    <div class="card">
+      <h3 class="card-title">Time asleep <span class="muted micro">h</span></h3>
       <div id="ch-timeasleep" class="h230"></div>
     </div>
-    <div class="card" data-cat="body">
+    <div class="card">
+      <h3 class="card-title">Sleep stages</h3>
+      <div id="ch-sleepstages" class="h230"></div>
+    </div>
+    <div class="card">
+      <h3 class="card-title">Heart rate range <span class="muted micro">bpm · min/avg/max</span></h3>
+      <div id="ch-hrrange" class="h230"></div>
+    </div>
+    <div class="card">
+      <h3 class="card-title">Respiratory rate <span class="muted micro">breaths/min</span></h3>
+      <div id="ch-resp" class="h230"></div>
+    </div>
+    <div class="card">
+      <h3 class="card-title">SpO2 <span class="muted micro">%</span></h3>
+      <div id="ch-spo2" class="h230"></div>
+    </div>
+    <div class="card">
+      <h3 class="card-title">Walking HR avg <span class="muted micro">bpm</span></h3>
+      <div id="ch-walkhr" class="h230"></div>
+    </div>
+    <div class="card">
+      <h3 class="card-title">Day rating <span class="muted micro">1–3</span></h3>
+      <div id="ch-dayrating" class="h230"></div>
+    </div>
+    </div>
+  </section>
+
+  <section class="vstack data-sec" data-cat="activity">
+    <h2 class="disp t20 m0">Activity</h2>
+    <div class="grid-2 data-grid">
+    <div class="card">
+      <h3 class="card-title">Steps</h3>
+      <div id="ch-steps" class="h230"></div>
+    </div>
+    <div class="card">
+      <h3 class="card-title">Distance <span class="muted micro">km</span></h3>
+      <div id="ch-distance" class="h230"></div>
+    </div>
+    <div class="card">
+      <h3 class="card-title">Active energy <span class="muted micro">kcal</span></h3>
+      <div id="ch-activekcal" class="h230"></div>
+    </div>
+    <div class="card">
+      <h3 class="card-title">Basal energy <span class="muted micro">kcal</span></h3>
+      <div id="ch-basalkcal" class="h230"></div>
+    </div>
+    <div class="card">
+      <h3 class="card-title">Exercise minutes <span class="muted micro">min</span></h3>
+      <div id="ch-exercise" class="h230"></div>
+    </div>
+    <div class="card">
+      <h3 class="card-title">Flights climbed</h3>
+      <div id="ch-flights" class="h230"></div>
+    </div>
+    <div class="card">
       <h3 class="card-title">Water intake <span class="muted micro">ml</span></h3>
       <div id="ch-water" class="h230"></div>
     </div>
-    <div class="card" data-cat="body">
+    <div class="card">
       <h3 class="card-title">Training volume <span class="muted micro">kg · sets</span></h3>
       <div id="ch-hevyvol" class="h230"></div>
     </div>
-  </div>
+    </div>
 
-  <div class="card" data-cat="environment">
-    <h3 class="card-title mb-2">Recent activity</h3>
-    <ul class="feed" id="activity-feed"><li class="dim">Nothing logged yet.</li></ul>
-  </div>
+    <div class="card">
+      <h3 class="card-title mb-2">Recent writes <span class="muted micro">MCP and panel</span></h3>
+      <ul class="feed" id="activity-feed"><li class="dim">Nothing recorded yet.</li></ul>
+    </div>
+  </section>
 </div>
 {% endblock %}
 {% block scripts %}

@@ -61,7 +61,7 @@ async function unavailableTargets(reason) {
 
   assert.equal(h.node('nTgtBanner').hidden,false);
   assert.equal(h.node('nTgtReason').textContent,reason);
-  assert.equal(h.node('nTgtReasonLabel').textContent,'Engine reason');
+  assert.equal(h.node('nTgtReasonLabel').textContent,'Reason');
   assert.equal(h.node('nTgtReload').hidden,true);
   assert.equal(h.node('nKpiKcal').textContent,'600');
   assert.equal(h.node('nKpiProtein').textContent,'50');

@@ -141,7 +141,7 @@
   function renderTargetHelp(targets) {
     const banner = document.getElementById("nTgtBanner");
     banner.hidden = targets.status === "ok";
-    document.getElementById("nTgtReasonLabel").textContent = targets.status === "error" ? "Request error" : "Engine reason";
+    document.getElementById("nTgtReasonLabel").textContent = targets.status === "error" ? "Request error" : "Reason";
     document.getElementById("nTgtReason").textContent = targets.reason || "The engine did not return a reason.";
     document.getElementById("nTgtReload").hidden = targets.status !== "error";
   }
@@ -691,7 +691,7 @@
     let items = meal === "All meals" ? allRecipes
       : allRecipes.filter((it) => it.meal_type === MEAL_TAG[meal]);
     if (!allRecipes.length) {
-      list.innerHTML = '<p class="dim">No recipes yet. Import one from Cronometer via the coach.</p>';
+      list.innerHTML = '<p class="dim">No recipes yet. Import one from Cronometer with the toolkit (or your MCP client).</p>';
       return;
     }
     // "Closes today's gaps": server-ranked (a PRESENTATION ranking — see the
@@ -718,7 +718,7 @@
     }
     if (!items.length) {
       list.innerHTML = `<p class="dim">No recipes tagged ${esc(meal.toLowerCase())} yet — ` +
-        "tag via the coach (<code>recipe-tag</code>).</p>";
+        "tag one with <code>recipe-tag</code> (MCP).</p>";
       return;
     }
     list.replaceChildren(...items.map((it) => {
@@ -859,7 +859,7 @@
     const noted = products.filter((p) => (p.notes || "").trim());
     if (!noted.length) {
       el.innerHTML = '<p class="dim">No interaction or timing notes captured yet — log one on a ' +
-        "supplement (coach: supplement_products.notes) and it appears here.</p>";
+        "supplement (supplement_products.notes) and it appears here.</p>";
       return;
     }
     el.replaceChildren(...noted.map((p) => {
@@ -877,7 +877,7 @@
       const d = await fetchJSON("/api/nutrition/supplements");
       if (!d.products.length) {
         el.innerHTML = '<p class="dim">No supplements configured yet — add one to supplement_products ' +
-          "(coach) and today's log will show up here.</p>";
+          "(MCP) and today's log will show up here.</p>";
         renderSuppNotes([]);
         return;
       }

@@ -75,20 +75,12 @@
     </div>
   </div>
 
-  <div class="grid-2">
-    <div class="card">
-      {# T55 flag 2: HRV algorithm varies by source (apple=SDNN, fitbit=RMSSD
-         — see toolkit/SCHEMA.sql daily_metrics.hrv_ms), one honest caption
-         per page. #}
-      <h3 class="card-title">HRV &amp; resting HR <span class="muted micro">HRV ms · SDNN/RMSSD varies by source</span></h3>
-      <div id="rHrv" class="h200"></div>
-    </div>
-    <div class="card">
-      <h3 class="card-title mb-1">Cross-links</h3>
-      <p class="muted note-txt m0">The readiness score above is real now (see the › drill for
-        what's dragging it down). Still pending: cross-pillar linking — connecting that score to
-        dose timing, screen time, alcohol and training load.</p>
-    </div>
+  <div class="card">
+    {# T55 flag 2: HRV algorithm varies by source (apple=SDNN, fitbit=RMSSD
+       — see toolkit/SCHEMA.sql daily_metrics.hrv_ms), one honest caption
+       per page. Fork 2026-10-29: the placeholder Cross-links card was removed. #}
+    <h3 class="card-title">HRV &amp; resting HR <span class="muted micro">HRV ms · SDNN/RMSSD varies by source</span></h3>
+    <div id="rHrv" class="h200"></div>
   </div>
 </div>
 {% endblock %}
