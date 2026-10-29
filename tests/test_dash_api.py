@@ -57,6 +57,31 @@ def dash_client(tmp_path):
     return client
 
 
+def _care_client(tmp_path, seed):
+    hdb = tmp_path / "health.db"
+    con = sqlite3.connect(hdb)
+    con.executescript(SCHEMA)
+    seed(con)
+    con.commit()
+    con.close()
+    app = create_app({
+        "TESTING": True, "WTF_CSRF_ENABLED": False, "RATELIMIT_ENABLED": False,
+        "PANEL_DB": str(tmp_path / "panel.db"), "PANEL_COOKIE_SECURE": False,
+        "HEALTH_DB": str(hdb),
+    })
+    client = app.test_client()
+    with app.app_context():
+        token = auth_mod.create_session()
+    client.set_cookie(auth_mod.SESSION_COOKIE, token)
+    return client
+
+
+def _iso_days_ago(n):
+    from datetime import timedelta
+    d = datetime.now(ZoneInfo("Europe/Paris")).date() - timedelta(days=n)
+    return d.isoformat()
+
+
 def test_endpoints_require_auth(tmp_path):
     app = create_app({"TESTING": True, "WTF_CSRF_ENABLED": False, "RATELIMIT_ENABLED": False,
                       "PANEL_DB": str(tmp_path / "p.db"), "PANEL_COOKIE_SECURE": False})
@@ -87,13 +112,9 @@ def test_days_whitelist(dash_client):
     assert dash_client.get("/api/dash/body?days=1").status_code == 200
 
 
-def test_subjective_and_safety_shapes(dash_client):
+def test_subjective_shape(dash_client):
     subj = dash_client.get("/api/dash/subjective").get_json()["rows"]
     assert subj[0]["day_rating"] == 3 and subj[0]["focus"] == 4
-    safety = dash_client.get("/api/dash/safety").get_json()
-    assert safety["vitals"][0]["systolic"] == 126
-    # 5 + 10 configured medication only; the unrelated row is excluded
-    assert safety["doses"][0]["dose_total_mg"] == 15.0
 
 
 def test_subjective_days_window(tmp_path):
@@ -122,42 +143,6 @@ def test_subjective_days_window(tmp_path):
     # same whitelist-and-validate style as /metrics and /sleep
     assert client.get("/api/dash/subjective?days=1").status_code == 200
     assert client.get("/api/dash/subjective?days=evil").status_code == 400
-
-
-def test_safety_days_window(tmp_path):
-    # safety gained an optional whitelisted `days` (owner-review r3) so the Mind
-    # page range dd's "All time" mode is genuinely unbounded, not 365-capped —
-    # same whitelist-and-validate style as /subjective. A bare call keeps the
-    # pre-r3 default 365-day window.
-    hdb = tmp_path / "health.db"
-    con = sqlite3.connect(hdb)
-    con.executescript(SCHEMA)
-    con.execute("INSERT INTO vitals(date, time, systolic, diastolic, resting_hr)"
-                " VALUES('" + LOCAL_TODAY + "', '08:00', 126, 82, 62)")
-    con.execute("INSERT INTO vitals(date, time, systolic, diastolic, resting_hr)"
-                " VALUES(date('now', '-400 day'), '08:00', 130, 85, 64)")
-    con.execute("INSERT INTO meds_log(date, drug, dose_mg) VALUES('" + LOCAL_TODAY + "', 'medication', 10)")
-    con.execute("INSERT INTO meds_log(date, drug, dose_mg) VALUES(date('now', '-400 day'), 'medication', 5)")
-    con.commit()
-    con.close()
-    app = create_app({
-        "TESTING": True, "WTF_CSRF_ENABLED": False, "RATELIMIT_ENABLED": False,
-        "PANEL_DB": str(tmp_path / "panel.db"), "PANEL_COOKIE_SECURE": False,
-        "HEALTH_DB": str(hdb),
-    })
-    client = app.test_client()
-    with app.app_context():
-        token = auth_mod.create_session()
-    client.set_cookie(auth_mod.SESSION_COOKIE, token)
-    # bare call keeps the pre-r3 default 365-day window: the -400 day rows are out
-    bare = client.get("/api/dash/safety").get_json()
-    assert len(bare["vitals"]) == 1 and len(bare["doses"]) == 1
-    # days=all is unbounded — picks up the 400-day-old vitals + dose rows too
-    allw = client.get("/api/dash/safety?days=all").get_json()
-    assert len(allw["vitals"]) == 2 and len(allw["doses"]) == 2
-    # same whitelist-and-validate style as /metrics and /subjective
-    assert client.get("/api/dash/safety?days=1").status_code == 200
-    assert client.get("/api/dash/safety?days=evil").status_code == 400
 
 
 def test_assessments_empty_by_default(dash_client):
@@ -237,116 +222,6 @@ def test_sleep_log_shape(tmp_path):
     assert rows_all[0]["time_asleep_hours"] is None
     # same whitelist as /metrics
     assert client.get("/api/dash/sleep?days=evil").status_code == 400
-
-
-def test_care_empty_by_default(dash_client):
-    # fixture seeds no skincare rows — the External care page must render
-    # per-card honest empty states, never a 500/404 (demo DB is unseeded too)
-    r = dash_client.get("/api/dash/care")
-    assert r.status_code == 200
-    d = r.get_json()
-    assert d["products"] == []
-    assert d["daily"] == []
-    assert d["last_used"] == {}
-    assert d["today_used"] == {}
-    assert d["routine_streak"] == {"days": 0, "current": False}
-
-
-def _care_client(tmp_path, seed):
-    hdb = tmp_path / "health.db"
-    con = sqlite3.connect(hdb)
-    con.executescript(SCHEMA)
-    seed(con)
-    con.commit()
-    con.close()
-    app = create_app({
-        "TESTING": True, "WTF_CSRF_ENABLED": False, "RATELIMIT_ENABLED": False,
-        "PANEL_DB": str(tmp_path / "panel.db"), "PANEL_COOKIE_SECURE": False,
-        "HEALTH_DB": str(hdb),
-    })
-    client = app.test_client()
-    with app.app_context():
-        token = auth_mod.create_session()
-    client.set_cookie(auth_mod.SESSION_COOKIE, token)
-    return client
-
-
-def _iso_days_ago(n):
-    from datetime import timedelta
-    d = datetime.now(ZoneInfo("Europe/Paris")).date() - timedelta(days=n)
-    return d.isoformat()
-
-
-def test_care_shaped(tmp_path):
-    yday = _iso_days_ago(1)
-
-    def seed(con):
-        con.execute("INSERT INTO skincare_products(product_id, slot, brand, product_name)"
-                    " VALUES(1, 'morning', 'Example brand', 'Sample care item A')")
-        con.execute("INSERT INTO skincare_products(product_id, slot, brand, product_name)"
-                    " VALUES(2, 'evening', 'Example brand', 'Sample care product')")
-        con.execute("INSERT INTO skincare_products(product_id, slot, brand, product_name)"
-                    " VALUES(3, 'weekly', NULL, 'Sample weekly task')")
-        # Care activity yesterday + today = current 2-day streak; an isolated
-        # day 10 days back is an older island and must NOT extend it
-        for d in (LOCAL_TODAY, yday, _iso_days_ago(10)):
-            con.execute("INSERT INTO skincare_log(date, slot, product_id, used)"
-                        " VALUES(?, 'morning', 1, 1)", (d,))
-        # today: evening step skipped, weekly step done -> 3 steps, 2 used
-        con.execute("INSERT INTO skincare_log(date, slot, product_id, used)"
-                    " VALUES(?, 'evening', 2, 0)", (LOCAL_TODAY,))
-        con.execute("INSERT INTO skincare_log(date, slot, product_id, used)"
-                    " VALUES(?, 'weekly', 3, 1)", (LOCAL_TODAY,))
-
-    d = _care_client(tmp_path, seed).get("/api/dash/care").get_json()
-    assert d["routine_streak"] == {"days": 2, "current": True}
-    assert {p["product_name"] for p in d["products"]} == {
-        "Sample care item A", "Sample care product", "Sample weekly task"
-    }
-    assert d["last_used"]["1"] == LOCAL_TODAY
-    assert d["today_used"] == {"1": True, "2": False, "3": True}
-    today_row = next(r for r in d["daily"] if r["date"] == LOCAL_TODAY)
-    assert today_row["total"] == 3 and today_row["used"] == 2
-    yday_row = next(r for r in d["daily"] if r["date"] == yday)
-    assert yday_row["total"] == 1 and yday_row["used"] == 1
-
-
-def test_care_daily_counts_active_products_only(tmp_path):
-    # T55 flag-1: the page's daily done/expected aggregate mirrors the
-    # round-5 engine care score (toolkit/health.py scores(), T34 lesson) —
-    # BOTH sides of the fraction consider ACTIVE products only. A retired
-    # product's in-window rows must neither inflate (its used=1 rows) nor
-    # deflate (its used=0 rows) the page adherence, so ring and page agree
-    # on the same fixture.
-    def seed(con):
-        con.execute("INSERT INTO skincare_products(product_id, slot, product_name, active)"
-                    " VALUES(1, 'morning', 'Sample care item A', 1)")
-        con.execute("INSERT INTO skincare_products(product_id, slot, product_name, active)"
-                    " VALUES(2, 'evening', 'Retired sample product', 0)")
-        # active product missed today; retired product logged used=1 —
-        # pre-T55 this read 1/2 (inflated by the retired row's used=1)
-        con.execute("INSERT INTO skincare_log(date, slot, product_id, used)"
-                    " VALUES(?, 'morning', 1, 0)", (LOCAL_TODAY,))
-        con.execute("INSERT INTO skincare_log(date, slot, product_id, used)"
-                    " VALUES(?, 'evening', 2, 1)", (LOCAL_TODAY,))
-
-    d = _care_client(tmp_path, seed).get("/api/dash/care").get_json()
-    today_row = next(r for r in d["daily"] if r["date"] == LOCAL_TODAY)
-    assert today_row["total"] == 1 and today_row["used"] == 0
-
-
-def test_care_lapsed_streak_reports_zero(tmp_path):
-    # a run that ended 3 days ago is not a current streak — no-guilt zero,
-    # never a stale "5 days" that would fabricate ongoing adherence
-    def seed(con):
-        con.execute("INSERT INTO skincare_products(product_id, slot, product_name)"
-                    " VALUES(1, 'morning', 'Sample care item A')")
-        for n in (3, 4, 5):
-            con.execute("INSERT INTO skincare_log(date, slot, product_id, used)"
-                        " VALUES(?, 'morning', 1, 1)", (_iso_days_ago(n),))
-
-    d = _care_client(tmp_path, seed).get("/api/dash/care").get_json()
-    assert d["routine_streak"] == {"days": 0, "current": False}
 
 
 def test_habits_ledger_empty_by_default(dash_client):
@@ -550,12 +425,6 @@ def test_habits_ledger_detail_gate_uses_effective_streak(tmp_path):
     gate = data["gate"]
     assert gate["ready"] is False
     assert gate["weakest"] == "abandoned"
-
-
-def test_env_latest(dash_client):
-    env = dash_client.get("/api/dash/env").get_json()
-    assert env["weather"]["condition"] == "overcast"
-    assert env["air"]["european_aqi_mean"] == 22.5
 
 
 def test_today_seeds_rating_and_water(dash_client):
@@ -839,66 +708,6 @@ def test_body_composition_surfaces_bridge_errors(dash_client, monkeypatch):
     monkeypatch.setattr(bridge, "run", refuse)
     r = dash_client.get("/api/dash/body-composition")
     assert r.status_code == 502 and r.get_json()["ok"] is False
-
-
-def test_env_history_windowed(tmp_path):
-    # task-52: /env grew an optional `days` window that ALSO returns
-    # weather_history/air_history for the Data page's trend charts, while
-    # weather/air (latest row, for the "Today outside" card) stay unwindowed.
-    def seed(con):
-        con.execute("INSERT INTO weather(date, location, condition, temp_min_c, temp_max_c, uv_index_max)"
-                    " VALUES('" + LOCAL_TODAY + "', 'X', 'sunny', 12.0, 19.5, 3.1)")
-        con.execute("INSERT INTO weather(date, location, condition, temp_min_c, temp_max_c)"
-                    " VALUES(date('now', '-400 day'), 'X', 'rain', 2.0, 6.0)")
-        con.execute("INSERT INTO air_quality(date, location, european_aqi_mean, european_aqi_max)"
-                    " VALUES('" + LOCAL_TODAY + "', 'X', 22.5, 30.0)")
-        con.execute("INSERT INTO air_quality(date, location, european_aqi_mean, european_aqi_max)"
-                    " VALUES(date('now', '-400 day'), 'X', 55.0, 70.0)")
-
-    client = _care_client(tmp_path, seed)
-    bare = client.get("/api/dash/env").get_json()
-    # bare call keeps the pre-existing default 365-day window for history —
-    # the -400 day rows are out, but weather/air (latest) are unaffected
-    assert bare["weather"]["condition"] == "sunny"
-    assert len(bare["weather_history"]) == 1
-    assert bare["weather_history"][0]["temp_max_c"] == 19.5
-    assert len(bare["air_history"]) == 1
-
-    allw = client.get("/api/dash/env?days=all").get_json()
-    assert len(allw["weather_history"]) == 2
-    assert len(allw["air_history"]) == 2
-
-    assert client.get("/api/dash/env?days=evil").status_code == 400
-    assert client.get("/api/dash/env?days=1").status_code == 200
-
-
-def test_workouts_empty_by_default(dash_client):
-    # workouts (Apple Health cardio/other — distinct from Hevy strength sets)
-    # is unseeded on the demo DB; the Data page's per-type chart must render
-    # honest-empty, not a 500/404.
-    r = dash_client.get("/api/dash/workouts")
-    assert r.status_code == 200
-    assert r.get_json()["rows"] == []
-
-
-def test_workouts_shaped_and_windowed(tmp_path):
-    def seed(con):
-        con.execute("INSERT INTO workouts(date, type, minutes, kcal, km)"
-                    " VALUES('" + LOCAL_TODAY + "', 'run', 32.0, 310.0, 5.1)")
-        con.execute("INSERT INTO workouts(date, type, minutes, kcal, km)"
-                    " VALUES(date('now', '-100 day'), 'cycle', 45.0, 400.0, 18.0)")
-
-    client = _care_client(tmp_path, seed)
-    week = client.get("/api/dash/workouts?days=30").get_json()["rows"]
-    assert len(week) == 1 and week[0]["type"] == "run" and week[0]["minutes"] == 32.0
-    # task-52 fix wave: kcal/km ride along too — the Data page charts all
-    # three dimensions, not just minutes (review finding)
-    assert week[0]["kcal"] == 310.0 and week[0]["km"] == 5.1
-    allw = client.get("/api/dash/workouts?days=all").get_json()["rows"]
-    assert len(allw) == 2
-    # allw is date-ordered: the -100 day 'cycle' row comes first
-    assert allw[0]["type"] == "cycle" and allw[0]["kcal"] == 400.0 and allw[0]["km"] == 18.0
-    assert client.get("/api/dash/workouts?days=evil").status_code == 400
 
 
 def test_hevy_volume_empty_by_default(dash_client):

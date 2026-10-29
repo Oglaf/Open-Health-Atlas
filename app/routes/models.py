@@ -1,87 +1,60 @@
-"""Models & spend: current model, safe switching (auto-rollback in hermesctl),
-OpenRouter spend vs a budget cap, Fitbit re-auth status.
-
-Everything agent-side goes through the bridge to hermesctl (runs as hermes —
-the panel never sees API keys). The budget cap is panel state (panel.db).
+"""Wearable sync (fork owner decision 2026-10-28): the old Models & spend
+page (active model switch, OpenRouter spend/budget, Fitbit re-auth token
+state — all hermesctl/Hermes-agent features that do not exist on this
+containerized deployment) is reduced to a wearable-sync status page that
+works for ANY logged-in user, reading only the user's own health database:
+the scheduled Google Health collector's last run record (source_sync_runs,
+written by `collector-run-record`) plus daily_metrics fitbit freshness.
+No bridge calls, no owner-only gate.
 """
-import re
-import time
+from flask import Blueprint, jsonify
 
-from flask import Blueprint, jsonify, request
-
-from app import bridge, users
-from app.panel_db import get_db
+from app import canon, db_read
 
 bp = Blueprint("models", __name__, url_prefix="/api/models")
 
-MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9/_.:\-]{0,79}\Z")
+
+def _guard():
+    if not db_read.available():
+        return jsonify(ok=False, error="health database not available"), 503
+    return None
 
 
-@bp.before_request
-def _owner_only():
-    # The agent/model and budget surface is installation-global in Phase 1
-    # (docs/MULTI_USER.md) — never serve or let a non-owner mutate it.
-    if not users.is_owner(users.current_user()):
-        return jsonify(
-            ok=False,
-            error="Model and agent settings are not available for this account yet.",
-        ), 403
-
-
-def _setting(key, default=None):
-    row = get_db().execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
-    return row["value"] if row else default
-
-
-def _run(*args, timeout=30.0):
-    try:
-        return jsonify(ok=True, result=bridge.run(*args, timeout=timeout))
-    except bridge.BridgeError as exc:
-        return jsonify(ok=False, error=str(exc)), 400
+def _row(query, params=()):
+    rows = db_read.query(query, params)
+    return rows[0] if rows else None
 
 
 @bp.get("/status")
 def status():
-    out = {"budget_monthly_usd": _setting("budget_monthly_usd")}
-    try:
-        out["agent"] = bridge.run("hermes-status")
-    except bridge.BridgeError as exc:
-        out["agent"] = {"error": str(exc)}
-    try:
-        out["spend"] = bridge.run("hermes-spend")
-    except bridge.BridgeError as exc:
-        out["spend"] = {"error": str(exc)}
-    return jsonify(out)
-
-
-@bp.post("/set")
-def set_model():
-    b = request.get_json(silent=True) or {}
-    model = (b.get("model") or "").strip()
-    if not MODEL_RE.fullmatch(model):
-        return jsonify(ok=False, error="model id has an unexpected shape"), 400
-    # hermesctl restarts the gateway, health-checks and auto-rolls-back; give it time.
-    return _run("hermes-model-set", model, timeout=160.0)
-
-
-@bp.post("/budget")
-def budget():
-    b = request.get_json(silent=True) or {}
-    try:
-        val = float(b.get("monthly_usd"))
-    except (TypeError, ValueError):
-        return jsonify(ok=False, error="monthly_usd must be a number"), 400
-    if not (0 <= val <= 10000):
-        return jsonify(ok=False, error="monthly_usd out of range"), 400
-    db = get_db()
-    db.execute("INSERT INTO settings(key, value) VALUES('budget_monthly_usd', ?)"
-               " ON CONFLICT(key) DO UPDATE SET value=excluded.value", (str(val),))
-    db.execute("INSERT INTO audit_log(ts, event, detail) VALUES(?,?,?)",
-               (int(time.time()), "settings.budget", str(val)))
-    db.commit()
-    return jsonify(ok=True, budget_monthly_usd=val)
-
-
-@bp.get("/fitbit")
-def fitbit():
-    return _run("fitbit-status")
+    """One call, current user's own DB:
+    - last successful collector run / last run of any status (source_sync_runs)
+    - latest fitbit daily_metrics date + days-with-data in the last 30
+    - freshness judgment (fresh/stale) against the same 3-day window
+      app.routes.integrations uses; "never" is latest_date=None.
+    """
+    if (resp := _guard()) is not None:
+        return resp
+    last_ok = _row(
+        "SELECT completed_at, coverage_from, coverage_to, rows_written"
+        " FROM source_sync_runs WHERE source = 'google-health' AND status = 'success'"
+        " ORDER BY id DESC LIMIT 1")
+    last_any = _row(
+        "SELECT completed_at, status, error_code FROM source_sync_runs"
+        " WHERE source = 'google-health' ORDER BY id DESC LIMIT 1")
+    latest = _row("SELECT MAX(date) AS m FROM daily_metrics WHERE source = 'fitbit'")
+    latest_date = latest["m"] if latest else None
+    days30 = _row(
+        "SELECT COUNT(DISTINCT date) AS n FROM daily_metrics"
+        " WHERE source = 'fitbit' AND date >= ?", (canon.days_ago_iso(30),))
+    freshness = None
+    if latest_date:
+        freshness = "fresh" if latest_date >= canon.days_ago_iso(3) else "stale"
+    return jsonify(
+        ok=True,
+        collector_last_ok=dict(last_ok) if last_ok else None,
+        collector_last_run=dict(last_any) if last_any else None,
+        fitbit_latest=latest_date,
+        fitbit_freshness=freshness,
+        fitbit_days_30=(days30["n"] if days30 else 0),
+    )

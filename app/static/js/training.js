@@ -1,8 +1,8 @@
-/* Body page (design v-body; formerly Training, analysis-only): 7-axis
-   muscle-balance radar (Current strengths default, Planned and Logged 7d),
-   athletic radar, cited strength-ratio pyramid, V-taper gauge, weight trend,
-   quarter battery, per-lift progression/PR. Set capture lives in the Telegram
-   loop. All numbers come from health.py endpoints — nothing computed here. */
+/* Body page: 7-axis muscle-balance radar, body map (activation/pain + the
+   physio loop), V-taper gauge, weight trend, per-lift progression/PR. All
+   numbers come from health.py endpoints — nothing computed here.
+   Fork 2026-10-28: the athletic radar, cited strength-ratio pyramid and the
+   quarter-test battery were removed (owner decision, docs/PRODUCT_AUTHORITY.md). */
 (function () {
   if (typeof echarts === "undefined") return;
   const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
@@ -15,8 +15,8 @@
      server re-windowing) keeps the overall-index baseline honest — "100 = your
      first logged week" stays anchored to the true first week even when the
      window hides it; the range only changes what's on screen, never the maths.
-     The radars / ratios / V-taper / quarter / goals are current-state or
-     engine-fixed-window analyses with no time axis and don't subscribe. */
+     Muscle Balance and V-taper are current-state / engine-fixed-window
+     analyses with no time axis and don't subscribe. */
   const RANGE_DAYS = { Day: 1, Week: 7, Month: 30, Year: 365, All: null };
   const WINDOW_LABEL = { Day: "past day", Week: "last 7 days", Month: "last 30 days",
     Year: "last year", All: "all time" };
@@ -134,69 +134,8 @@
       + `÷ ${last.weight_kg} kg. Higher = stronger for your size.`;
   }
 
-  /* ---------- Goals card (real Body targets only — no mock rows) ---------- */
-  const round1 = (n) => Math.round(n * 10) / 10;
-  function goalRow(label, pct, value, color) {
-    const row = document.createElement("div"); row.className = "goal-row";
-    const l = document.createElement("span"); l.className = "goal-label"; l.textContent = label;
-    const bg = document.createElement("div"); bg.className = "barbg";
-    const fill = document.createElement("div"); fill.className = "barfill";
-    fill.style.width = Math.max(0, Math.min(100, pct)) + "%";
-    fill.style.background = color;   // CSS var → auto-recolors on theme change
-    bg.appendChild(fill);
-    const v = document.createElement("span"); v.className = "goal-val"; v.textContent = value;
-    row.append(l, bg, v);
-    return row;
-  }
-  async function loadGoals() {
-    const list = document.getElementById("goals-list");
-    if (!list) return;
-    const rows = [];
-    // WCR toward the engine's target (≤ sense: bar full when current ≤ target).
-    try {
-      const v = (await getJSON("/api/training/vtaper")).result;
-      if (v && !v.insufficient_data && v.current && typeof v.current.wcr === "number"
-          && typeof v.target_wcr === "number") {
-        const cur = v.current.wcr, tgt = v.target_wcr;
-        const pct = cur <= tgt ? 100 : (tgt / cur) * 100;
-        rows.push(goalRow("WCR → target · waist ÷ chest", pct,
-          `${cur} → ${tgt}`, v.at_target ? "var(--good)" : "var(--accent)"));
-      }
-    } catch (_) {}
-    // Athletic axes that have a real owner-set target (score > 0).
-    try {
-      const a = (await getJSON("/api/training/athletic-radar")).result;
-      const label = { strength: "Strength", endurance: "Endurance", speed: "Speed",
-                      balance: "Balance", flexibility: "Flexibility" };
-      (a.axes || []).forEach(ax => {
-        const s = (a.scores || {})[ax] || {};
-        if (typeof s.score === "number" && s.score > 0) {
-          rows.push(goalRow(`${label[ax] || ax} → target`, s.score,
-            `${s.score} / 100`, "var(--accent)"));
-        }
-      });
-    } catch (_) {}
-    // Weekly muscle volume vs plan (only when a plan exists).
-    try {
-      const m = (await getJSON("/api/training/muscle-radar")).result;
-      const axes = m.axes || [];
-      const logged = axes.reduce((t, g) => t + (m.combined[g] || 0), 0);
-      const planned = axes.reduce((t, g) => t + (m.planned[g] || 0), 0);
-      if (planned > 0) {
-        rows.push(goalRow("Weekly volume vs plan", (logged / planned) * 100,
-          `${round1(logged)} / ${round1(planned)} sets`, "var(--good)"));
-      }
-    } catch (_) {}
-    list.replaceChildren();
-    if (!rows.length) {
-      const p = document.createElement("p");
-      p.className = "muted note-txt m0";
-      p.textContent = "No body targets set yet — targets come from the engine config.";
-      list.appendChild(p);
-      return;
-    }
-    rows.forEach(r => list.appendChild(r));
-  }
+  /* fork 2026-10-28: the Goals card (and its loadGoals) was removed with
+     Athletic Profile and Strength ratios (owner decision). */
 
   /* ---------- per-lift progression chart ---------- */
   const progCache = {};   // exercise → full payload (view-sliced per range)
@@ -412,204 +351,6 @@
       style: { text: msg, fill: cssVar("--text-dim"), fontSize: 13 } } };
   }
 
-  /* ---------- §3c athletic radar (5 axes, 0–100 vs target) ---------- */
-  async function loadAthletic() {
-    const el = document.getElementById("ch-athletic");
-    const note = document.getElementById("athletic-note");
-    if (charts.ath) charts.ath.dispose();
-    charts.ath = echarts.init(el);
-    let d;
-    try { d = (await getJSON("/api/training/athletic-radar")).result; }
-    catch (e) { charts.ath.setOption(emptyOpt(e.message)); return; }
-    const axes = d.axes || [];
-    const label = { strength: "Strength", endurance: "Endurance", speed: "Speed",
-                    balance: "Balance", flexibility: "Flexibility" };
-    const scores = axes.map(a => {
-      const s = d.scores[a] || {};
-      return (typeof s.score === "number") ? s.score : 0;   // insufficient → 0 (gap)
-    });
-    const pending = axes.filter(a => typeof (d.scores[a] || {}).score !== "number")
-                        .map(a => label[a]);
-    const stale = axes.filter(a => (d.scores[a] || {}).stale).map(a => label[a]);
-    if (!scores.some(v => v > 0)) {
-      charts.ath.setOption(emptyOpt("No athletic tests scored yet.\nSet a target + log a test."));
-    } else {
-      const P = pal();
-      const indicator = axes.map(a => ({ name: label[a], max: 100 }));
-      // label text → axis key, so a clicked axis name resolves to its drill URL.
-      const keyOf = {}; axes.forEach(a => { keyOf[label[a]] = a; });
-      charts.ath.setOption({
-        legend: { top: 0, right: 0, textStyle: { color: P.muted, fontSize: 10 } },
-        tooltip: Object.assign(tip(P), { confine: true,
-          formatter: () => axes.map(a => {
-            const s = d.scores[a] || {};
-            if (typeof s.score !== "number") return label[a] + ": —";
-            return `${label[a]}: ${s.score} / target 100` + (s.stale ? " (stale)" : "");
-          }).join("<br>") }),
-        radar: {
-          indicator,
-          radius: "62%", center: ["50%", "56%"], splitNumber: 4,
-          // triggerEvent makes the axis-name labels clickable (they now HAVE a
-          // destination: the /training/athletic/<axis> drill page this task
-          // ships — the round-2 owner flag about inert labels). tooltip.show:
-          // false suppresses the component-item tooltip that triggerEvent would
-          // otherwise attach to those labels (same pattern as Muscle Balance).
-          triggerEvent: true,
-          tooltip: { show: false },
-          axisName: { color: P.muted, fontSize: 10, fontWeight: 600 },
-          splitLine: { lineStyle: { color: P.grid } },
-          splitArea: { areaStyle: { color: ["transparent"] } },
-          axisLine: { lineStyle: { color: P.grid } },
-        },
-        series: [{ type: "radar", symbol: "circle", symbolSize: 5,
-          data: [
-            { name: "current", value: scores,
-              lineStyle: { width: 2.4, color: P.accent },
-              itemStyle: { color: P.accent },
-              areaStyle: { color: P.accent, opacity: 0.22 } },
-            // Planned target overlay: the engine's scores are already
-            // %-of-target (capped at 100), so per-axis numeric targets live on
-            // different unit scales and can't share this 0–100 web. The honest
-            // overlay is therefore the uniform target REFERENCE — a 100 ring
-            // labelled "target" (100 = at your owner-set target on every axis).
-            // Never a fabricated numeric target series.
-            // task-50 item 4: this uniform-100 target ring is the "planned"
-            // series for this radar — muted dashed, same convention as
-            // Muscle Balance's planned overlay above.
-            { name: "target", value: axes.map(() => 100),
-              lineStyle: { width: 1.5, type: "dashed", color: P.muted },
-              itemStyle: { color: P.muted },
-              areaStyle: { color: P.muted, opacity: 0.05 } },
-          ] }],
-      });
-      // §3c drill-down: axis names navigate to the per-axis breakdown page.
-      wireAxisLabels(charts.ath, indicator,
-        (name) => keyOf[name] ? "/training/athletic/" + encodeURIComponent(keyOf[name]) : null);
-    }
-    const bits = [];
-    if (pending.length) bits.push("Awaiting setup: " + pending.join(", "));
-    if (stale.length) bits.push("Stale (retest): " + stale.join(", "));
-    note.textContent = bits.join(" · ") ||
-      "Five test-backed axes · solid = current score, dashed ring = your target (100). "
-      + "Click an axis for its breakdown.";
-  }
-
-  /* ---------- §3d strength ratios (diverging opposing-bar) ---------- */
-  let ratioView = "tested";
-  const FLAG_COLOR = () => ({
-    in_range: cssVar("--good"), out_of_range: cssVar("--bad"),
-    asymmetry: cssVar("--bad"), watch: cssVar("--warn"),
-    trend_only: cssVar("--text-dim"), outside_protocol_range: cssVar("--warn"),
-    insufficient_data: cssVar("--card-edge"),
-  });
-  async function loadRatios() {
-    const el = document.getElementById("ch-ratios");
-    const note = document.getElementById("ratio-note");
-    if (charts.ratio) charts.ratio.dispose();
-    charts.ratio = echarts.init(el);
-    let d;
-    try { d = (await getJSON("/api/training/strength-ratios?view=" + ratioView)).result; }
-    catch (e) { charts.ratio.setOption(emptyOpt(e.message)); return; }
-    const rows = ratioView === "tested" ? ratioRowsTested(d.rows)
-                                        : ratioRowsEveryday(d.rows);
-    note.textContent = d.caveat || "";
-    if (!rows.length) {
-      charts.ratio.setOption(emptyOpt(ratioView === "tested"
-        ? "No isolation tests logged yet (log the quarterly battery)."
-        : "No compound lifts logged yet."));
-      return;
-    }
-    const cats = rows.map(r => r.label);
-    const colors = FLAG_COLOR();
-    // Population-pyramid: numerator to the LEFT (negative), denominator RIGHT,
-    // each as its share of the pair so a row always spans the same width and the
-    // split reads as balance. Ratio + target + flag ride on the right label.
-    const left = rows.map(r => ({ value: r.ok ? -r.numShare : 0,
-      itemStyle: { color: r.ok ? (colors[r.flag] || cssVar("--ch-1")) : cssVar("--card-edge") } }));
-    const right = rows.map(r => ({ value: r.ok ? r.denShare : 0,
-      itemStyle: { color: cssVar("--ch-2"), opacity: r.ok ? 0.85 : 0.3 } }));
-    const P = pal();
-    charts.ratio.setOption({
-      grid: { left: 150, right: 132, top: 8, bottom: 20 },
-      tooltip: Object.assign(tip(P), { trigger: "axis", axisPointer: { type: "shadow" }, confine: true,
-        formatter: (p) => { const r = rows[p[0].dataIndex]; return r.tip; } }),
-      xAxis: { type: "value", min: -1, max: 1, axisLabel: { show: false },
-        splitLine: { show: false }, axisLine: { show: false }, axisTick: { show: false } },
-      yAxis: { type: "category", data: cats, inverse: true,
-        axisLabel: { color: P.muted, fontSize: 11, width: 142, overflow: "truncate" },
-        axisLine: { lineStyle: { color: P.grid } }, axisTick: { show: false } },
-      series: [
-        { name: "num", type: "bar", stack: "x", data: left, barWidth: "55%",
-          itemStyle: { borderRadius: 3 } },
-        { name: "den", type: "bar", stack: "x", data: right, barWidth: "55%",
-          itemStyle: { borderRadius: 3 },
-          label: { show: true, position: "right", color: P.muted, fontSize: 11,
-            formatter: (p) => rows[p.dataIndex].rightLabel } },
-      ],
-    });
-  }
-  function ratioRowsTested(rows) {
-    const out = [];
-    (rows || []).forEach(r => {
-      // one visual row per side (unilateral pairs give left+right)
-      r.sides.forEach(s => {
-        // side FIRST so the L/R disambiguator is never truncated off the end
-        const label = r.per_side ? `${s.side[0].toUpperCase()} · ${r.num_label} : ${r.den_label}`
-                                 : `${r.num_label} : ${r.den_label}`;
-        if (s.status === "insufficient_data") {
-          out.push({ label, ok: false, flag: "insufficient_data",
-            rightLabel: "needs test", tip: `${label}<br>insufficient data` });
-          return;
-        }
-        const tot = s.num_value + s.den_value;
-        // band/ideal are null on trend-only pairs (hip flex:ext — no defensible target)
-        const protocolValid = s.protocol_valid !== false;
-        const repTxt = [s.num_reps, s.den_reps].filter(x => x !== null && x !== undefined)
-          .join(" / ");
-        const bandTxt = !protocolValid ? "recorded outside preferred 6–8 reps"
-          : (r.band ? `${r.band[0] ?? "–"}–${r.band[1] ?? "∞"}` : "trend only");
-        const gap = (r.per_side && r.side_gap_flag === "asymmetry")
-          ? ` · L/R gap ${Math.round(r.side_gap * 100)}%` : "";
-        out.push({ label, ok: true, flag: s.flag,
-          numShare: s.num_value / tot, denShare: s.den_value / tot,
-          rightLabel: `${s.ratio} (${protocolValid ? (r.ideal ?? "trend") : "baseline*"})`,
-          tip: `${label}<br>ratio ${s.ratio} · target ${bandTxt} · <b>${s.flag}</b>`
-             + (!protocolValid && repTxt
-               ? `<br>e1RM adjusted for reps (${repTxt}); lower-confidence comparison, retest optional`
-               : "")
-             + `${gap}<br><span class="muted">${r.evidence} — ${r.cite}</span>` });
-      });
-    });
-    return out;
-  }
-  function ratioRowsEveryday(rows) {
-    return (rows || []).map(r => {
-      if (r.status === "insufficient_data") {
-        return { label: r.label, ok: false, flag: "insufficient_data",
-          rightLabel: "no data", tip: `${r.label}<br>insufficient data (heuristic)` };
-      }
-      const tot = r.num_e1rm + r.den_e1rm;
-      const tgt = r.target === null ? "trend only" : `~${r.target}`;
-      return { label: r.label, ok: true, flag: r.flag,
-        numShare: r.num_e1rm / tot, denShare: r.den_e1rm / tot,
-        rightLabel: `${r.ratio} (${tgt})`,
-        tip: `${r.label}<br>ratio ${r.ratio} · target ${tgt} · <b>${r.flag}</b>`
-           + `<br><span class="muted">heuristic — pattern level, not muscle-specific</span>` };
-    });
-  }
-
-  /* ---------- §3e quarter-progress strip ---------- */
-  async function loadQuarter() {
-    const strip = document.getElementById("quarter-strip");
-    const miss = document.getElementById("quarter-missing");
-    let d;
-    try { d = (await getJSON("/api/training/fitness-tests")).result; }
-    catch (e) { strip.textContent = e.message; return; }
-    strip.textContent = `${d.priority_covered} / ${d.priority_total} priority tests logged in ${d.quarter || "this quarter"}`;
-    const names = (d.priority_missing || []).map(m => m.name);
-    miss.textContent = names.length ? "Still needed: " + names.join(", ") : "Battery complete — nice.";
-  }
-
   /* ---------- §3f V-taper (WCR gauge — engine-computed, no local math) ---------- */
   async function loadVtaper() {
     const cur = document.getElementById("vtaper-current");
@@ -682,8 +423,8 @@
   // Paints health.py `muscle-map` verbatim through the shared MuscleFigure
   // component. Colors are CSS-class driven, so themechange needs no rebuild.
   let mfFront = null, mfBack = null;
-  let mfLens = "activation", mfSide = "combined";
-  let mfSeq = 0;   // fetch token: rapid lens/side toggling must never let an
+  let mfLens = "activation";
+  let mfSeq = 0;   // fetch token: rapid lens toggling must never let an
                    // out-of-order response paint stale data (review finding)
   function mfEmpty(el, msg) {
     const p = document.createElement("p");
@@ -703,8 +444,6 @@
     if (note) note.hidden = true;
     const loopCard = document.getElementById("mf-loop");
     if (loopCard) loopCard.hidden = true;
-    const mobCard = document.getElementById("mf-mobility");
-    if (mobCard) mobCard.hidden = true;
   }
   // §3g/§3h — the pain physio-loop + mobility READ-ONLY renderers moved to the
   // shared js/physio-render.js (window.HermesPhysio) so the Body cockpit AND the
@@ -721,19 +460,13 @@
       [wrapF, wrapB].forEach((el) => mfEmpty(el, "Body-map component failed to load (vendored asset missing?)."));
       return;
     }
-    // the Combined|L/R sub-toggle belongs to the strength-balance lens only;
     // the physio-loop card belongs to the pain lens only
-    const sideRow = document.getElementById("mf-side");
-    if (sideRow) sideRow.hidden = mfLens !== "strength-balance";
     const loopCard = document.getElementById("mf-loop");
     if (loopCard && mfLens !== "pain") loopCard.hidden = true;
-    const mobCard = document.getElementById("mf-mobility");
-    if (mobCard && mfLens !== "mobility") mobCard.hidden = true;
     const seq = ++mfSeq;
     let data;
     try {
       let url = "/api/training/muscle-map?lens=" + encodeURIComponent(mfLens);
-      if (mfLens === "strength-balance") url += "&side=" + encodeURIComponent(mfSide);
       data = (await getJSON(url)).result;
     } catch (e) {
       if (seq !== mfSeq) return;      // a newer toggle superseded this fetch
@@ -742,17 +475,16 @@
       return;
     }
     if (seq !== mfSeq) return;        // stale response — never paint it
-    // Region click is LENS-DEPENDENT (Task C): EXPLORE lenses (activation,
-    // strength-balance) keep drilling into the muscle group's sub-page; REPORT
-    // lenses (pain, mobility) open the dedicated workspace pre-selected to the
-    // clicked SVG region. mfLens is read at CLICK time (module scope), so the
-    // once-created closure always branches on the CURRENT lens. Joints (pain,
-    // group:null) route by id too — pain is often joint pain.
+    // Region click is LENS-DEPENDENT: activation drills into the muscle
+    // group's sub-page; the pain lens opens the pain workspace pre-selected to
+    // the clicked SVG region. mfLens is read at CLICK time (module scope), so
+    // the once-created closure always branches on the CURRENT lens. Joints
+    // (pain, group:null) route by id too — pain is often joint pain.
     const onRegionClick = (id, name, reg) => {
       // Mouse listeners exist on every drawn path, including neutral
       // silhouette parts. Only a region in the current payload may navigate,
       // matching the role/tabindex gate used for keyboard interaction.
-      if ((mfLens === "pain" || mfLens === "mobility") && reg) {
+      if (mfLens === "pain" && reg) {
         location.assign("/training/" + mfLens + "?region=" + encodeURIComponent(id));
       } else if (reg && reg.group) {
         location.assign("/training/muscle/" + encodeURIComponent(reg.group));
@@ -763,7 +495,7 @@
     // region with a group is a button" rule. Governs role/tabindex + cursor in
     // muscle-figure.js; the mouse click listener fires regardless.
     const actionable = (reg, payload) =>
-      (payload.lens === "pain" || payload.lens === "mobility") ? true : !!(reg && reg.group);
+      (payload.lens === "pain") ? true : !!(reg && reg.group);
     if (!mfFront) mfFront = window.MuscleFigure.create(wrapF, { view: "front", interactive: true, onRegionClick, actionable });
     if (!mfBack) mfBack = window.MuscleFigure.create(wrapB, { view: "back", interactive: true, onRegionClick, actionable });
     mfFront.update(data);
@@ -775,14 +507,6 @@
     if (data.lens === "pain") {
       window.HermesPhysio.renderPhysioLoop(data);
       bits.push("color = max logged pain (0–10 NRS) · last " + data.window_days + "d · joints included");
-    } else if (data.lens === "mobility") {
-      window.HermesPhysio.renderMobility(data);
-      bits.push("color = cited mobility-norm status · last " + data.window_days + "d · grey = untested");
-    } else if (data.lens === "strength-balance") {
-      bits.push("cited tested ratios only · grey = untested (quarterly isolation battery)");
-      // honest gaps, engine-worded: e.g. the ER:IR internal rotators are
-      // undrawn and can never be colored (design rule: never on the chest)
-      (data.unrepresentable || []).forEach((u) => bits.push(u.note));
     } else {
       bits.push("effective sets · last " + data.window_days + "d · authored map first");
       if ((data.coarse_fallback || []).length)
@@ -905,13 +629,10 @@
     picker.addEventListener("change", () => renderProgression(picker.value));
     renderProgression(OVERALL);
     loadWSR();
-    loadGoals();
 
-    window.HermesUI.onTab("ratio", (tab) => { ratioView = tab; loadRatios(); });
     // lens selector is live from birth (review: a tab must never toggle
-    // without changing the data) — one lens today, more land per phase
+    // without changing the data)
     window.HermesUI.onTab("mflens", (tab) => { mfLens = tab; loadMuscleMap(); });
-    window.HermesUI.onTab("mfside", (tab) => { mfSide = tab; loadMuscleMap(); });
     // range dd re-windows only the time-series trend cards (data is cached, so
     // this re-slices, no refetch). Radars/ratios/gauge/quarter/goals don't
     // subscribe — current-state or engine-fixed windows, no time axis.
@@ -921,9 +642,6 @@
       loadWeight();
     });
     loadMuscle();
-    loadAthletic();
-    loadRatios();
-    loadQuarter();
     loadVtaper();
     loadWeight();
   }
@@ -933,8 +651,6 @@
     loadWSR();
     // Goals bars are CSS-var colored (CSSOM) and re-theme themselves — no rebuild.
     loadMuscle();
-    loadAthletic();
-    loadRatios();
     loadVtaper();
     loadWeight();
   });

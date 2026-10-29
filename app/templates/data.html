@@ -54,17 +54,14 @@
         <span class="label">Category</span>
         {# Filters which cards are visible by pillar — purely client-side
            (data for every card is already loaded), composes with range/source
-           above. Mapping: Body = body-composition/activity, Mind = mood/focus
-           + medication/vitals context (mind.html already treats that chart as
-           part of Mind), Recovery = sleep/HR/HRV, Environment = weather/air
-           + the activity feed (neither is a pillar; both are page-local
-           context, grouped together as "everything else"). #}
+           above. Mapping: Body = body-composition/activity, Recovery =
+           sleep/HR/HRV, Environment = the activity feed (not a pillar;
+           page-local context). Fork 2026-10-28: Mind removed with its cards. #}
         <div class="dd" data-dd="category">
           <button class="ddbtn" type="button">All <span class="cv">▾</span></button>
           <div class="ddmenu">
             <button type="button" data-val="All" class="on">All</button>
             <button type="button" data-val="Body">Body</button>
-            <button type="button" data-val="Mind">Mind</button>
             <button type="button" data-val="Recovery">Recovery</button>
             <button type="button" data-val="Environment">Environment</button>
           </div>
@@ -97,24 +94,14 @@
       <h3 class="card-title">Weight &amp; waist <span class="muted micro">kg / cm</span></h3>
       <div id="ch-body" class="h230"></div>
     </div>
-    <div class="card" data-cat="mind">
-      <h3 class="card-title">Mood · Energy · Focus <span class="muted micro">1–5</span></h3>
-      <div id="ch-mood" class="h230"></div>
-    </div>
-  </div>
-
-  <div class="card" data-cat="mind">
-    <div class="row between wrap mb-2">
-      <h3 class="card-title">Medication and vitals — BP · resting HR · dose <span class="muted micro">mmHg · bpm · mg</span></h3>
-      <span class="chip">watch: ≥135 / ≥85 mmHg</span>
-    </div>
-    <div id="ch-safety" class="h300"></div>
   </div>
 
   {# task-52: raw-data gallery — every remaining daily_metrics/body_metrics/
-     sleep_log/intake/workouts/hevy_sets/subjective_daily/weather/air_quality
+     sleep_log/intake/workouts/hevy_sets/subjective_daily
      column gets its own chart (owner: "each of them has their own graph...
-     not everything is a line"). Grouped only where the existing convention
+     not everything is a line"; fork 2026-10-28: weather/air-quality/
+     medication/mood cards removed — owner decision, see
+     docs/PRODUCT_AUTHORITY.md). Grouped only where the existing convention
      already combines one measurement family (weight+waist above; hr min/avg/
      max and the 5 tape measurements below). Category buckets match the
      dropdown above. #}
@@ -162,10 +149,6 @@
     <div class="card" data-cat="mind">
       <h3 class="card-title">Day rating <span class="muted micro">1–3</span></h3>
       <div id="ch-dayrating" class="h230"></div>
-    </div>
-    <div class="card" data-cat="environment">
-      <h3 class="card-title">Air quality <span class="muted micro">European AQI</span></h3>
-      <div id="ch-air" class="h230"></div>
     </div>
   </div>
 
@@ -246,16 +229,9 @@
     </div>
   </div>
 
-  <div class="card" data-cat="body">
-    <h3 class="card-title mb-2">Log a body composition scan</h3>
-    <p class="muted note-txt">Paste one report document (see docs/LOCAL_MCP.md "Write/ingest" for the exact field list) and submit — it crosses the same validated writer the CLI and MCP health_write use. Re-submitting the same date/device replaces that scan.</p>
-    <textarea id="bc-paste" class="note-editor" style="min-height:140px" spellcheck="false"
-      placeholder='{"date": "2026-06-29", "components": [{"component": "weight", "value_kg": 81.2}], ...}'></textarea>
-    <div class="row gap-2 mt-2 wrap">
-      <button class="btn" id="bc-submit" type="button">Log scan</button>
-      <span class="muted micro" id="bc-submit-msg"></span>
-    </div>
-  </div>
+  {# fork 2026-10-28: the manual "Log a body composition scan" paste form
+     was removed (owner decision — scans come from the CLI / MCP
+     log-body-composition path); the BIA display cards above stay. #}
 
   <div class="grid-2">
     <div class="card" data-cat="recovery">
@@ -271,42 +247,14 @@
       <div id="ch-water" class="h230"></div>
     </div>
     <div class="card" data-cat="body">
-      <h3 class="card-title">Workouts <span class="muted micro">min by type</span></h3>
-      <div id="ch-workouts" class="h230"></div>
-    </div>
-    <div class="card" data-cat="body">
-      <h3 class="card-title">Workouts <span class="muted micro">kcal by type</span></h3>
-      <div id="ch-workoutskcal" class="h230"></div>
-    </div>
-    <div class="card" data-cat="body">
-      <h3 class="card-title">Workouts <span class="muted micro">km by type</span></h3>
-      <div id="ch-workoutskm" class="h230"></div>
-    </div>
-    <div class="card" data-cat="body">
       <h3 class="card-title">Training volume <span class="muted micro">kg · sets</span></h3>
       <div id="ch-hevyvol" class="h230"></div>
     </div>
   </div>
 
   <div class="card" data-cat="environment">
-    <h3 class="card-title">Weather <span class="muted micro">°C · UV</span></h3>
-    <div id="ch-weather" class="h230"></div>
-  </div>
-
-  <div class="grid-2">
-    <div class="card" data-cat="environment">
-      <h3 class="card-title mb-2">Today outside</h3>
-      <div class="vstack gap-2" id="env-card">
-        <div class="row between"><span class="muted micro">Weather</span><span id="env-weather">—</span></div>
-        <div class="row between"><span class="muted micro">UV / sun</span><span id="env-uv">—</span></div>
-        <div class="row between"><span class="muted micro">Air quality</span><span id="env-aqi">—</span></div>
-        <div class="row between"><span class="muted micro">Pollen</span><span id="env-pollen">—</span></div>
-      </div>
-    </div>
-    <div class="card" data-cat="environment">
-      <h3 class="card-title mb-2">Recent activity</h3>
-      <ul class="feed" id="activity-feed"><li class="dim">Nothing logged yet.</li></ul>
-    </div>
+    <h3 class="card-title mb-2">Recent activity</h3>
+    <ul class="feed" id="activity-feed"><li class="dim">Nothing logged yet.</li></ul>
   </div>
 </div>
 {% endblock %}

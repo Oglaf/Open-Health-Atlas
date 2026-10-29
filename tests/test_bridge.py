@@ -82,10 +82,6 @@ def _respond(req):
         return {"ok": True, "code": 0, "stdout": '{"ok": true, "day_rating": 3}', "stderr": ""}
     if sub == "eat":
         return {"ok": False, "code": 1, "stdout": "", "stderr": "no portions of 'sample-stew' left"}
-    if sub == "hermes-chat":
-        return {"ok": False, "code": 1,
-                "stdout": '{"ok": false, "error": "Hermes took too long"}',
-                "stderr": ""}
     if sub == "hypothesis-promote":
         return {
             "ok": False,
@@ -286,13 +282,6 @@ def test_failure_raises_with_health_py_message(app):
     assert json.loads(_audit_rows(app)[0]["detail"])["outcome"] == "exit:1"
 
 
-def test_hermesctl_json_error_is_unwrapped_for_the_ui(app):
-    with _owner_context(app):
-        with pytest.raises(bridge.BridgeError, match="^Hermes took too long$"):
-            bridge.run("hermes-chat", "--session", "hermes-panel-pain",
-                       stdin="hello")
-
-
 def test_structured_health_error_preserves_safe_code_and_message(app):
     with _owner_context(app):
         with pytest.raises(bridge.BridgeError, match="input fingerprint changed") as caught:
@@ -323,9 +312,10 @@ def test_fitness_writes_are_not_panel_reachable():
     """Capture is Telegram-only + the panel is analysis-only, so the §3e/§3c
     writes must NOT be reachable through the panel bridge (minimal surface).
     Reads are; the void command never is."""
-    assert "fitness-tests" in bridge.ALLOWED       # reads allowed
-    assert "athletic-radar" in bridge.ALLOWED
-    assert "strength-ratios" in bridge.ALLOWED
+    # fork 2026-10-28: fitness-tests/athletic-radar/strength-ratios left the
+    # allowlist with their pages (owner removal decision)
+    for gone in ("fitness-tests", "athletic-radar", "strength-ratios"):
+        assert gone not in bridge.ALLOWED
     for w in ("fitness-test-log", "athletic-target-set", "fitness-test-void"):
         assert w not in bridge.ALLOWED             # writes are not
     assert "vtaper" in bridge.ALLOWED              # §3f read is
@@ -352,9 +342,14 @@ def test_phase3_and_phase4_exact_reads_allowed_and_all_writers_excluded():
     assert {
         "readiness", "feature-registry", "feature-frame", "data-readiness",
         "goal-list", "outcome-associations", "finding-evidence",
-        "hypothesis-promote", "hypotheses", "hypothesis-brief",
-        "synthesis-history", "insight-run-status",
+        "hypothesis-promote",
     } <= bridge.ALLOWED
+    # fork 2026-10-28: hypotheses/hypothesis-brief/synthesis-history/
+    # insight-run-status left the allowlist with the removed Insight Explorer
+    for gone_cmd in ("hypotheses", "hypothesis-brief", "synthesis-history",
+                     "insight-run-status", "hermes-chat", "hermes-status",
+                     "hermes-spend", "hermes-model-set", "fitbit-status", "labs"):
+        assert gone_cmd not in bridge.ALLOWED, gone_cmd
     assert "correlate" not in bridge.ALLOWED
     assert "day-signature" not in bridge.ALLOWED
     for command in (
@@ -387,17 +382,17 @@ def test_physio_writes_are_not_panel_reachable():
         assert w not in bridge.ALLOWED             # …but every §3g write is not
 
 
-def test_labs_read_allowed_writes_not_reachable(tmp_path, monkeypatch):
-    """§labs: the read is bridge-exposed; the three writers (capture / ingest /
-    catalog seed) are collector-only and must never be panel-reachable.
+def test_labs_writers_not_reachable(tmp_path, monkeypatch):
+    """Fork 2026-10-28 (owner removal decision): the labs page/read left the
+    allowlist, and the three writers (capture / ingest / catalog seed) stay
+    collector-only.
 
-    The subtle path (audit finding M2): the generic `log` writer IS bridge-
-    reachable, and the labs table must not be writable through it either — so
-    `labs` must NOT be a LOGGABLE table. Without this, a bridge
-    `log labs test_name=… value=…` would bypass the cited-catalog pipeline."""
-    assert "labs" in bridge.ALLOWED                # read allowed
+    The subtle path (audit finding M2) still holds: the generic `log` writer IS
+    bridge-reachable, so the labs table must not be LOGGABLE through it —
+    a bridge `log labs test_name=…` must not bypass the catalog pipeline."""
+    assert "labs" not in bridge.ALLOWED
     for w in ("lab-capture", "lab-ingest", "import-lab-catalog"):
-        assert w not in bridge.ALLOWED             # collector-only writers are not
+        assert w not in bridge.ALLOWED
 
     from datetime import datetime, timezone
     from types import SimpleNamespace

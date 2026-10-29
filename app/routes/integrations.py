@@ -1,36 +1,25 @@
-"""Integrations & privacy settings page (task-36): a thin, read-only status
-board over the sources the vault already integrates with. No new bridge
-subcommands — this composes db_read SELECTs with the existing hermes-status
-and fitbit-status bridge reads (both already ALLOWED and panel-reachable via
-/api/models/*; see app/bridge.py).
+"""Wearable-sync status board (fork owner decision 2026-10-28; replaces
+Models & spend). Read-only rows over the CURRENT user's own health database:
+Hevy training sync (last hevy_sets date) and the scheduled Google Health
+collector (last run record from source_sync_runs + latest fitbit
+daily_metrics date). Apple is retired per RETIRED_SOURCES and reported
+separately so it can never drag or prop up the live status.
 
 Every chip below is a DETERMINISTIC derivation, documented here, never a
 hardcoded "Connected" — stale or missing data says so (owner ground rule).
 """
+import json
+
 from flask import Blueprint, jsonify
 
-from app import bridge, canon, db_read, users
+from app import canon, db_read
 
 bp = Blueprint("integrations", __name__, url_prefix="/api/integrations")
 
-
-@bp.before_request
-def _owner_only():
-    # Connected-sources status is installation-global in Phase 1
-    # (docs/MULTI_USER.md) — hermes-status/fitbit-status speak for the whole
-    # install, not a single member.
-    if not users.is_owner(users.current_user()):
-        return jsonify(
-            error="Integrations are not available for this account yet.",
-        ), 403
-
-# "Connected" freshness windows, in days. The only two rows here with a data
-# DATE to compare against "now" (Telegram is a live gateway health check, not
-# a date; Bloodwork is manual-upload by design, so its date is informational
-# only — see below). Hevy: 2-3 sessions/week is normal, so a run without a
-# hard rest week still reads Connected at 14 days. Wearable: Fitbit syncs
-# roughly daily, so 3 days catches a real sync outage without flagging a
-# single day the phone wasn't opened.
+# "Connected" freshness windows, in days. Hevy: 2-3 sessions/week is normal,
+# so a run without a hard rest week still reads Connected at 14 days.
+# Wearable: the collector syncs roughly daily, so 3 days catches a real
+# outage without flagging a single day the watch wasn't opened.
 HEVY_FRESH_DAYS = 14
 WEARABLE_FRESH_DAYS = 3
 
@@ -61,53 +50,35 @@ def _status_for(latest_date, fresh_days):
     return "connected" if latest_date >= canon.days_ago_iso(fresh_days) else "stale"
 
 
-def _telegram_status(agent):
-    if "error" in agent:
-        return "unknown"
-    if agent.get("gateway_active") is True:
-        return "connected"
-    if agent.get("gateway_active") is False:
-        return "not_running"
-    return "unknown"
-
-
 @bp.get("/sources")
 def sources():
-    """Composes the Connected-sources card (design image 31): Telegram bot /
-    Hermes agent (live gateway check via hermes-status), Hevy training sync
-    (last hevy_sets date), Wearable (Fitbit daily_metrics date + auth state —
-    Apple is retired per RETIRED_SOURCES and reported separately so it can
-    never drag or prop up the live status), Bloodwork lab (latest labs date —
-    manual-upload by design, so it gets no freshness judgment, only the real
-    date if any)."""
+    """Composes the Connected-sources card: Hevy training sync (last
+    hevy_sets date) and Wearable (the scheduled Google Health collector's
+    last run record + latest fitbit daily_metrics date)."""
     if (resp := _guard()) is not None:
         return resp
-
-    try:
-        agent = bridge.run("hermes-status")
-    except bridge.BridgeError as exc:
-        agent = {"error": str(exc)}
-
-    try:
-        fitbit = bridge.run("fitbit-status")
-    except bridge.BridgeError as exc:
-        fitbit = {"error": str(exc)}
 
     hevy_latest = _max_date("SELECT MAX(date) AS m FROM hevy_sets")
     apple_latest = _max_date("SELECT MAX(date) AS m FROM daily_metrics WHERE source = 'apple'")
     fitbit_latest = _max_date("SELECT MAX(date) AS m FROM daily_metrics WHERE source = 'fitbit'")
-    labs_latest = _max_date("SELECT MAX(date) AS m FROM labs")
     # Apple is retired (see RETIRED_SOURCES) — the combined wearable status
     # comes from fitbit alone now, even when apple rows exist and are newer.
     wearable_latest = fitbit_latest
 
+    last_run = db_read.query(
+        "SELECT completed_at, status, error_code, details_json"
+        " FROM source_sync_runs WHERE source = 'google-health'"
+        " ORDER BY id DESC LIMIT 1",
+    )
+    run = last_run[0] if last_run else None
+    details = None
+    if run is not None and run["details_json"]:
+        try:
+            details = json.loads(run["details_json"])
+        except (TypeError, ValueError):
+            details = None
+
     return jsonify(
-        telegram={
-            "status": _telegram_status(agent),
-            "model": agent.get("model"),
-            "provider": agent.get("provider"),
-            "error": agent.get("error"),
-        },
         hevy={
             "status": _status_for(hevy_latest, HEVY_FRESH_DAYS),
             "latest_date": hevy_latest,
@@ -115,9 +86,12 @@ def sources():
         wearable={
             "status": _status_for(wearable_latest, WEARABLE_FRESH_DAYS),
             "latest_date": wearable_latest,
+            "collector_last_run": run["completed_at"] if run else None,
+            "collector_status": run["status"] if run else None,
+            "collector_error": run["error_code"] if run else None,
+            "collector_details": details,
             "apple_latest": apple_latest,
             "fitbit_latest": fitbit_latest,
-            "fitbit_auth_status": fitbit.get("auth_status"),
             "apple": {
                 "status": "retired",
                 "latest_date": apple_latest,
@@ -125,8 +99,5 @@ def sources():
                 "note": f"retired {RETIRED_SOURCES['apple']} — wearable replaced; "
                         "archive imports may still land occasionally",
             },
-        },
-        labs={
-            "latest_date": labs_latest,
         },
     )

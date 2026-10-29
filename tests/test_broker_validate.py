@@ -174,47 +174,6 @@ def test_broker_accepts_strength_balance_lens_argv():
     assert b._validate("muscle-map", ["--evil", "x"]) is not None
 
 
-def test_broker_accepts_only_the_chat_session_flag():
-    b = _load()
-    assert b._validate(
-        "hermes-chat", ["--session", "hermes-panel-pain"]) is None
-    assert b._validate(
-        "hermes-chat", ["--session", "hermes-panel-c-" + "a" * 32]
-    ) is None
-    assert b._validate(
-        "hermes-chat", ["--session", "hermes-panel-c-" + "A" * 32]
-    ) is not None
-    assert b._validate(
-        "hermes-chat", ["--session", "hermes-panel-c-" + "a" * 31]
-    ) is not None
-    assert b._validate(
-        "hermes-chat", ["--session", "hermes-panel-c-" + "a" * 32, "--evil"]
-    ) is not None
-    assert b._validate("hermes-chat", ["--evil", "x"]) is not None
-
-
-def test_chat_audit_hashes_message_and_context_without_text():
-    b = _load()
-    context = {
-        "version": 1,
-        "surface": "panel",
-        "lens": "general",
-        "conversation_id": "a" * 32,
-        "range": {"kind": "all"},
-        "selected_region_ids": [],
-        "evidence_contract": "health-tool-v1",
-    }
-    fields = b._chat_audit(json.dumps({
-        "contract": "hermes-panel-turn-v1",
-        "message": "private owner message",
-        "context": context,
-    }))
-    encoded = json.dumps(fields)
-    assert "private owner message" not in encoded
-    assert "message_sha256" in fields and "context_sha256" in fields
-    assert "stdin_sha256" not in fields
-
-
 def test_store_true_flag_does_not_swallow_next_token():
     b = _load()
     # --all takes no value; a following bad flag must still be caught
@@ -280,10 +239,6 @@ def test_governed_analysis_surface_rejects_unrestricted_writers_and_flags():
          "--all"],
     ) is None
     assert b._validate("hypothesis-promote", ["--effect", "0.8"]) is not None
-    assert b._validate("insight-run-status", ["--limit", "20"]) is None
-    assert b._validate("insight-run-status", ["--limit", "0"]) is not None
-    assert b._validate("insight-run-status", ["unexpected"]) is not None
-    assert b._validate("insight-run-status", ["--before", "x"]) is not None
     assert b.TIMEOUTS["outcome-associations"] == 570
     assert b.TIMEOUTS["finding-evidence"] == 570
     assert b.TIMEOUTS["hypothesis-promote"] == 110
@@ -357,16 +312,9 @@ def test_phase5_bridge_validates_identifiers_ranges_cursors_and_positions():
             "--all",
         ],
     ) is not None
-    assert b._validate("hypothesis-brief", [hypothesis]) is None
-    assert b._validate("hypothesis-brief", []) is not None
-    assert b._validate("hypothesis-brief", [hypothesis, "extra"]) is not None
-    assert b._validate(
-        "hypotheses",
-        ["--status", "replicated", "--limit", "100", "--before", hypothesis],
-    ) is None
+    # fork 2026-10-28: hypothesis-brief/hypotheses left the allowlist
+    assert b._validate("hypothesis-brief", [hypothesis]) is not None
     assert b._validate("hypotheses", ["--status", "invented"]) is not None
-    assert b._validate("hypotheses", ["--limit", "101"]) is not None
-    assert b._validate("hypotheses", ["--limit", "9" * 5000]) is not None
     assert b._validate(
         "hypothesis-promote",
         [
@@ -376,7 +324,6 @@ def test_phase5_bridge_validates_identifiers_ranges_cursors_and_positions():
             "--days", "9" * 5000,
         ],
     ) is not None
-    assert b._validate("synthesis-history", ["--before", "not-an-id"]) is not None
 
 
 def test_parse_allowed_uids_single_value_behaves_exactly_as_before(monkeypatch):

@@ -2,13 +2,10 @@
 {% block title %}Integrations &amp; privacy{% endblock %}
 {% block content %}
 {# Integrations & privacy settings page (design image 31, task-36). Real
-   status from /api/integrations/sources (db_read + the existing
-   hermes-status/fitbit-status bridge reads — no new bridge subcommands, no
-   duplicated controls: the Fitbit re-auth flow stays on Models & spend).
-   Every chip is a DETERMINISTIC derivation (see integrations.js + that
-   route's docstring) — stale or missing data says so, never a hardcoded
-   "Connected". The privacy card states only what's true of THIS system,
-   in-repo-verifiable (CLAUDE.md determinism law). #}
+   status from /api/integrations/sources (per-user db_read SELECTs — no
+   bridge reads, no duplicated controls). Every chip is a DETERMINISTIC
+   derivation (see integrations.js + that route's docstring) — stale or
+   missing data says so, never a hardcoded "Connected". #}
 <div class="vstack">
   <div class="row-top between wrap">
     <div class="crumb">

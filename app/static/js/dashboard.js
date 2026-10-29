@@ -1,7 +1,7 @@
 /* Dashboard (design v-dashboard): greeting + coverage nudge, hero engine
    day-signature, scores strip — a big Consistency gauge arc (open at the
-   bottom, owner-review r3) plus five pillar rings (Body · Mind · Nutrition
-   · Recovery · External care), mini radars (muscle balance has Current
+   bottom, owner-review r3) plus pillar rings (Body · Nutrition · Recovery;
+   fork 2026-10-28: Mind / External care went with their pages), mini radars (muscle balance has Current
    strengths / Planned / Logged 7d source toggles), mood/focus trend, habits &
    kept-word.
    Engine JSON is rendered VERBATIM — score, band and insufficient_data all
@@ -243,17 +243,15 @@
     document.getElementById("hero-arc-cap").textContent = cap + " · open →";
   }
 
-  /* ------- rings: five pillar satellites, one uniform ring visual family ------- */
+  /* ------- rings: pillar satellites, one uniform ring visual family ------- */
   const SAT_DEFS = [
     // [key, label, href]  key null = pending score (honest placeholder)
     // task-60: captions removed from the rings — the pillar page at href
     // already explains the score/insufficiency in full; the ring itself
     // still signals insufficient_data non-textually (dashed .ring-wrap.is-empty).
     ["muscle_balance", "Body", "/training"],
-    ["mind", "Mind", "/mind"],
     ["nutrition", "Nutrition", "/nutrition"],
     ["recovery", "Recovery", "/recovery"],
-    ["care", "External care", "/care"],
   ];
 
   function satEl(label, href, s) {
@@ -353,35 +351,6 @@
         }));
       }
     } catch (e) { empty("dash-radar-muscle", e.message); }
-    try {
-      const d = (await fetchJSON("/api/training/athletic-radar")).result;
-      const axes = d.axes || [];
-      const label = { strength: "Strength", endurance: "Endurance", speed: "Speed",
-                      balance: "Balance", flexibility: "Flexibility" };
-      const scores = axes.map(a => (typeof (d.scores[a] || {}).score === "number") ? d.scores[a].score : 0);
-      if (!scores.some(v => v > 0)) empty("dash-radar-ath", "No athletic tests scored yet");
-      else chart("dash-radar-ath").setOption(Object.assign(frame(axes.map(a => ({ name: label[a], max: 100 }))), {
-        series: [{ type: "radar", symbol: "circle", symbolSize: 4,
-          data: [{ name: "score", value: scores,
-            lineStyle: { width: 2.2, color: P.accent }, itemStyle: { color: P.accent },
-            areaStyle: { color: P.accent, opacity: 0.22 } }] }],
-      }));
-    } catch (e) { empty("dash-radar-ath", e.message); }
-  }
-
-  /* ------- mood & focus trend (real subjective rows, last 14 days) ------- */
-  function trendChart() {
-    const cut = isoDaysAgo(14);
-    const rows = state.subjective.filter(r => r.date >= cut &&
-      (r.mood != null || r.focus != null));
-    if (!rows.length) return empty("dash-trend", "Mood & focus appear after evening check-ins");
-    const P = pal();
-    chart("dash-trend").setOption(lineOpt(
-      rows.map(r => r.date.slice(5)),
-      [{ n: "Mood", d: rows.map(r => r.mood), c: P.accent, area: true },
-       { n: "Focus", d: rows.map(r => r.focus), c: P.warn, dash: true }],
-      1, 5,
-      { legend: { show: true, right: 0, top: 0, textStyle: { color: P.muted, fontSize: 10 } } }));
   }
 
   /* ------- day-ratings calendar (mode follows the dropdown) -------
@@ -442,36 +411,10 @@
     }
   }
 
-  /* ------- strength-balance body maps (§3f Phase 2) ------- */
-  // Read-only glance, lens FIXED to strength-balance (product contract: no
-  // activation fallback on the dashboard). One fetch feeds both views; the
-  // whole card links to /training where the full lens picker lives.
-  async function loadMuscleFigure() {
-    const wrapF = document.getElementById("dash-mf-front");
-    const wrapB = document.getElementById("dash-mf-back");
-    if (!wrapF || !wrapB) return;
-    const fail = (msg) => [wrapF, wrapB].forEach((el) => {
-      const p = document.createElement("p");
-      p.className = "muted note-txt m0"; p.textContent = msg;
-      el.replaceChildren(p);
-    });
-    if (!window.MuscleFigure) {
-      fail("Body-map component failed to load (vendored asset missing?).");
-      return;
-    }
-    let data;
-    try {
-      data = (await fetchJSON("/api/training/muscle-map?lens=strength-balance")).result;
-    } catch (e) { fail(e.message); return; }
-    window.MuscleFigure.create(wrapF, { view: "front" }).update(data);
-    window.MuscleFigure.create(wrapB, { view: "back" }).update(data);
-    window.MuscleFigure.legend(document.getElementById("dash-mf-legend"), data);
-  }
-
   async function boot() {
     const [subj, scores] = await Promise.allSettled([
       // days=all: the calendar's "All time" mode aggregates whatever exists,
-      // never a silent 365-day cap; the 14-day trend still slices client-side.
+      // never a silent 365-day cap.
       fetchJSON("/api/dash/subjective?days=all"),
       fetchJSON("/api/dash/scores"),
     ]);
@@ -482,19 +425,17 @@
     }
     renderChips();
     renderRings();
-    trendChart();
     heatChart();
     renderHabits();
     loadRadars();
     loadHero();
     loadNudge();
-    loadMuscleFigure();
     if (subj.status === "rejected") window.HermesCharts.calEmpty("ch-heat", subj.reason.message);
   }
 
   window.HermesUI.onRange("dashboard", heatChart);
   window.addEventListener("themechange", () => {
-    renderRings(); trendChart(); heatChart(); loadRadars();
+    renderRings(); heatChart(); loadRadars();
   });
   window.addEventListener("resize", () => Object.values(charts).forEach(c => c.resize()));
   boot();

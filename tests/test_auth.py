@@ -9,7 +9,7 @@ from app.panel_db import get_db
 
 
 def test_unauthenticated_pages_redirect_to_login(client):
-    for path in ("/", "/training", "/mind", "/recovery", "/export"):
+    for path in ("/", "/training", "/data", "/recovery", "/export"):
         r = client.get(path)
         assert r.status_code == 302
         assert "/login" in r.headers["Location"]

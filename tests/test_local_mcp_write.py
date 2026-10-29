@@ -420,8 +420,6 @@ def test_hostile_attempts_refused_at_the_mcp_layer_and_independently_by_the_brok
             {"user": "alice", "command": "no-such-command"},
             {"user": "alice", "command": "import-hevy", "positional": ["evil.csv"]},
             {"user": "alice", "command": "user-provision", "positional": ["mallory"]},
-            {"user": "alice", "command": "hermes-chat",
-             "args": {"--session": "hermes-panel"}, "stdin": "hello"},
             {"user": "alice", "command": "hermes-model-set"},
             {"user": "alice", "command": "day-rating", "positional": ["green"],
              "args": {"--evil": "x"}},

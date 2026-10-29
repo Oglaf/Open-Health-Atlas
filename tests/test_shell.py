@@ -13,13 +13,16 @@ def test_dashboard_renders(authed):
     assert r.status_code == 200
     html = r.get_data(as_text=True)
     assert "OpenHealthAtlas" in html
-    # Ten-pillar navigation contract. Order lives in app/__init__.py NAV.
-    for item in ("Dashboard", "Consistency", "Body", "Mind", "Nutrition",
-                 "Recovery", "External care", "Labs", "Data Explorer",
-                 "Insight Explorer"):
+    # Navigation contract. Order lives in app/__init__.py NAV.
+    for item in ("Dashboard", "Consistency", "Body", "Nutrition",
+                 "Recovery", "Data Explorer"):
         assert item in html, f"nav item {item} missing from shell"
+    # Mind, External care, Labs and Insight Explorer were removed from this
+    # fork (owner decision, 2026-10-28 — see docs/PRODUCT_AUTHORITY.md).
+    for item in ("Mind", "External care", "Labs", "Insight Explorer"):
+        assert item not in html, f"removed nav item {item} still in shell"
     # Plans/Models/Chat/Export left the nav for the Settings drawer.
-    for row in ("Models &amp; spend", "Export", "Vault notes"):
+    for row in ("Wearable sync", "Export", "Vault notes"):
         assert row in html, f"settings drawer row {row} missing from shell"
     # task-50 item 6 (owner C3): the Program editor UI (page + drawer link)
     # was removed — /api/plans/* + health.py subcommands stay agent-only.
@@ -27,30 +30,23 @@ def test_dashboard_renders(authed):
     assert "Sign out" in html  # logout control shows for a live session
 
 
-def test_dashboard_has_strength_balance_figure_cards(authed):
-    """§3f Phase 2 (owner markup image 9): front + back body-map cards sit in
-    the first two columns directly below the radar row — read-only, strength-balance
-    FIXED as the default (no lens selector, no activation fallback: the
-    dashboard's first figure appearance was owner-decided to be this lens),
-    whole card links to /training."""
-    html = authed.get("/").get_data(as_text=True)
-    for marker in ('id="dash-mf-front"', 'id="dash-mf-back"',
-                   'id="dash-mf-legend"', "Strength balance",
-                   "vendor/body-muscles/body-muscles.umd.min.js",
-                   "js/muscle-figure.js"):
-        assert marker in html, marker
-    # no lens selector on the dashboard cards — the lens is fixed
-    assert 'data-group="mflens"' not in html
-    assert (html.index('id="ch-heat"') < html.index('id="habit-list"')
-            < html.index('id="dash-radar-muscle"') < html.index('id="dash-mf-front"')
-            < html.index('id="dash-sleep"') < html.index('id="hero-meta"'))
-
-
 def test_stub_pages_render(authed):
-    for path in ("/training", "/nutrition", "/labs", "/models", "/export",
-                 "/vault-notes", "/consistency", "/data", "/insights"):
+    for path in ("/training", "/nutrition", "/export",
+                 "/vault-notes", "/consistency", "/data", "/models"):
         r = authed.get(path)
         assert r.status_code == 200, f"{path} did not render"
+
+
+def test_removed_feature_urls_404(authed):
+    """Mind, External care, Labs, Insight Explorer, the athletic/strength-ratio/
+    mobility drill pages and the legacy /chat bookmark were removed from this
+    fork (owner decision, 2026-10-28 — see docs/PRODUCT_AUTHORITY.md)."""
+    for path in (
+        "/mind", "/mind/brain-dump", "/mind/prescriber-questions",
+        "/care", "/labs", "/insights", "/insights/conversations", "/chat",
+        "/training/athletic/strength", "/training/mobility",
+    ):
+        assert authed.get(path).status_code == 404, f"{path} did not 404"
 
 
 def test_body_page_has_hevy_import_button(authed):
@@ -80,9 +76,10 @@ def test_program_page_removed_redirects_to_training(authed):
     body = authed.get("/training").get_data(as_text=True)
     assert "js/program.js" not in body
     assert 'id="program-editor-root"' not in body
-    # Body still carries the Goals card + the overall/weight:strength charts
-    # (unrelated to the editor removal — just guarding against regression)
-    assert 'id="goals-list"' in body and 'id="ch-wsr"' in body
+    # Body still carries the weight:strength-ratio chart (unrelated to the
+    # editor removal — just guarding against regression). The Goals card was
+    # separately removed (owner decision, 2026-10-28).
+    assert 'id="ch-wsr"' in body
 
 
 def test_legacy_plans_redirects_to_training(authed):
@@ -93,13 +90,6 @@ def test_legacy_plans_redirects_to_training(authed):
     r = authed.get("/plans")
     assert r.status_code == 302
     assert r.headers["Location"].endswith("/training")
-
-
-def test_legacy_chat_redirects_to_insights(authed):
-    """Chat now lives embedded in Insight Explorer; /chat bookmarks survive."""
-    r = authed.get("/chat")
-    assert r.status_code == 302
-    assert r.headers["Location"].endswith("/insights")
 
 
 def test_consistency_page_links_to_habit_ledger(authed):
@@ -115,36 +105,6 @@ def test_consistency_habits_page_renders(authed):
     html = r.get_data(as_text=True)
     assert "Habit ledger" in html
     assert "js/consistency_habits.js" in html
-
-
-def test_mind_page_renders(authed):
-    r = authed.get("/mind")
-    assert r.status_code == 200
-    html = r.get_data(as_text=True)
-    assert "Mind" in html
-    # tabs and neutral medication language; no named treatment is bundled
-    for item in ("Medication", "Social", "General"):
-        assert item in html, f"{item!r} missing from /mind"
-    # task-31: brain-dump + prescriber cards drill to their sub-pages
-    for href in ("/mind/brain-dump", "/mind/prescriber-questions"):
-        assert href in html, f"drill link {href} missing from /mind"
-
-
-def test_mind_braindump_page_renders(authed):
-    r = authed.get("/mind/brain-dump")
-    assert r.status_code == 200
-    html = r.get_data(as_text=True)
-    assert "Brain-dump" in html
-    assert "js/mind_braindump.js" in html
-
-
-def test_mind_prescriber_page_is_honest_pending(authed):
-    r = authed.get("/mind/prescriber-questions")
-    assert r.status_code == 200
-    html = r.get_data(as_text=True)
-    # honest-pending: no data source, no fabricated questions
-    assert "0 saved" in html
-    assert "No questions collected yet." in html
 
 
 def test_recovery_page_renders(authed):
@@ -185,16 +145,6 @@ def test_recovery_readiness_drill_has_real_engine(authed):
 
 def test_recovery_drill_unknown_metric_404(authed):
     assert authed.get("/recovery/bogus").status_code == 404
-
-
-def test_care_page_renders(authed):
-    r = authed.get("/care")
-    assert r.status_code == 200
-    html = r.get_data(as_text=True)
-    for item in ("External care", "Care activity streak", "Routine adherence",
-                 "Morning", "Evening", "Weekly", "Adherence",
-                 "product log"):
-        assert item in html, f"{item!r} missing from /care"
 
 
 def test_nutrition_page_renders(authed):
@@ -239,37 +189,6 @@ def test_nutrition_target_card_is_honest_scaffold(authed):
         assert f">{phase}<" in html
     assert 'id="nTgtReason"' in html
     assert 'id="nutrition-target-setup"' in html
-
-
-def test_insights_page_links_conversations_card(authed):
-    """T51: the Insight Explorer's conversations card carries
-    the "all ›" drill link + is honest that this is the panel's own chat log,
-    not Telegram."""
-    html = authed.get("/insights").get_data(as_text=True)
-    assert "Conversations with Hermes" in html
-    assert "/insights/conversations" in html
-
-
-def test_insights_page_has_explicit_analysis_and_history_controls(authed):
-    """Analysis and history remain available through explicit controls."""
-    html = authed.get("/insights").get_data(as_text=True)
-    for control_id in (
-        "ins-analyze",
-        "load-hypotheses",
-        "load-syntheses",
-        "load-run-audit",
-    ):
-        assert f'id="{control_id}"' in html
-
-
-def test_insights_conversations_page_renders(authed):
-    r = authed.get("/insights/conversations")
-    assert r.status_code == 200
-    html = r.get_data(as_text=True)
-    assert "Conversations with Hermes" in html
-    assert "General panel chat" in html
-    assert "js/insights_conversations.js" in html
-    assert html.count("<main") == 1
 
 
 def test_security_headers_on_public_page(client):

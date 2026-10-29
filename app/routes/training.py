@@ -7,7 +7,9 @@ has exactly one home (determinism law). The one write — logging a set — goes
 through the bridge to `health.py log-set`, which tags the row source='ui' so a
 later Hevy reimport (source='hevy' only) can't wipe it. e1RM is Epley
 (weight × (1 + reps/30)), computed here from raw sets — display math, not a
-stored value, same pattern as the Phase-3 dashboard.
+stored value, same pattern as the Phase-3 dashboard. Fork 2026-10-28: the
+quarterly-test surfaces (athletic radar/detail, strength ratios, fitness-test
+coverage) were removed — owner decision (docs/PRODUCT_AUTHORITY.md).
 """
 import re
 from datetime import date
@@ -31,222 +33,10 @@ def _e1rm(weight, reps):
     return round(weight * (1 + reps / 30.0), 1)
 
 
-# ── §3c athletic drill pages ────────────────────────────────────────────────
-# The 5 athletic axes are a FIXED UI contract, same as the radar's axes list.
-# `slug`/`kind`/`test_name` mirror health.py's ATHLETIC_AXES + CATALOG for the
-# single-field axes (endurance/speed/balance/flexibility); Strength is the
-# multi-lift Hevy-e1RM axis and carries no single test. This is DISPLAY config
-# only — the engine (athletic-radar) remains the sole source of truth for every
-# SCORE; the drill endpoint only *presents* those engine scores + reads raw
-# test history (db_read, SELECT-only) for the progress chart and the
-# improving/on-target/below chips.
-AXIS_META = {
-    "strength":    {"label": "Strength"},
-    "endurance":   {"label": "Endurance",   "slug": "run-3k",        "kind": "timed",
-                    "test_name": "3 km run",           "unilateral": False},
-    "speed":       {"label": "Speed",       "slug": "sprint-30m",    "kind": "timed",
-                    "test_name": "30 m sprint",        "unilateral": False},
-    "balance":     {"label": "Balance",     "slug": "balance-stand", "kind": "hold",
-                    "test_name": "Single-leg balance", "unilateral": True},
-    "flexibility": {"label": "Flexibility", "slug": "sit-and-reach", "kind": "distance",
-                    "test_name": "Sit-and-reach",      "unilateral": False},
-}
-# Direction of "better" per test kind — mirrors health.py KIND_BETTER (used only
-# to read the improving/below chips off raw history; never to re-score).
-KIND_BETTER = {"strength": "higher", "hold": "higher", "distance": "higher", "timed": "lower"}
-KIND_UNIT = {"strength": "kg", "hold": "s", "distance": "cm", "timed": "s"}
-
-
-def _band(score):
-    """score→color band. score is the engine's %-of-target (100 = at target):
-    good = at/above target, warn = within reach (≥80%), bad = well short."""
-    if score is None:
-        return "bad"
-    if score >= 100:
-        return "good"
-    if score >= 80:
-        return "warn"
-    return "bad"
-
-
-def _fmt_value(kind, v):
-    """Display a raw test value in its native unit (timed → mm:ss)."""
-    if v is None:
-        return "—"
-    if kind == "strength":
-        return f"{v:g} kg"
-    if kind == "timed":
-        s = int(round(v))
-        return f"{s // 60}:{s % 60:02d}"
-    if kind == "hold":
-        return f"{v:g} s"
-    if kind == "distance":
-        return f"{v:g} cm"
-    return f"{v:g}"
-
-
-def _chip(value, target, prev, better):
-    """Deterministic field-test status chip:
-      • 'on target' when the latest value meets/beats the owner target,
-      • else 'improving' when it beat the PREVIOUS test of the same kind,
-      • else 'below'. None when target-vs-value can't be judged (no target).
-    `better` sets the comparison direction (timed = lower is better)."""
-    met = None
-    if value is not None and target is not None:
-        met = value >= target if better == "higher" else value <= target
-    improving = None
-    if value is not None and prev is not None:
-        improving = value > prev if better == "higher" else value < prev
-    if met is True:
-        return "on target"
-    if improving is True:
-        return "improving"
-    if met is False:
-        return "below"
-    return None
-
-
-def _hevy_best_by_date(lift):
-    """Best e1RM per session date for one lift (Epley, the same display math as
-    the progression chart). Feeds the strength drill's progress + chips."""
-    rows = db_read.query(
-        "SELECT date, weight_kg, reps FROM hevy_sets"
-        " WHERE exercise_title = ? AND COALESCE(set_type,'normal') != 'warmup'"
-        " AND weight_kg IS NOT NULL AND reps IS NOT NULL AND date IS NOT NULL"
-        " ORDER BY date", (lift,))
-    best = {}
-    for r in rows:
-        e = _e1rm(r["weight_kg"], r["reps"])
-        if e is not None and e > best.get(r["date"], 0.0):
-            best[r["date"]] = e
-    return [(d, best[d]) for d in sorted(best)]
-
-
-def _fitness_history(slug, kind):
-    """Raw value per test date for a bilateral movement (SELECT-only). `col` is
-    a fixed literal from the kind, never user input."""
-    col = "cm" if kind == "distance" else "seconds"
-    rows = db_read.query(
-        f"SELECT date, {col} AS v FROM fitness_tests"
-        f" WHERE movement = ? AND side = 'bilateral' AND voided = 0"
-        f" AND date IS NOT NULL AND {col} IS NOT NULL ORDER BY date", (slug,))
-    return [(r["date"], r["v"]) for r in rows]
-
-
-def _fitness_history_sides(slug):
-    """Per-side (left/right) seconds history for a unilateral movement."""
-    rows = db_read.query(
-        "SELECT date, side, seconds AS v FROM fitness_tests"
-        " WHERE movement = ? AND side IN ('left','right') AND voided = 0"
-        " AND date IS NOT NULL AND seconds IS NOT NULL ORDER BY date", (slug,))
-    out = {"left": [], "right": []}
-    for r in rows:
-        out[r["side"]].append((r["date"], r["v"]))
-    return out
-
-
-def _weaker_by_date(sides):
-    """Weaker-side value per date that has BOTH sides — mirrors the engine's
-    Balance min-side aggregation, so the progress line matches the axis score."""
-    left, right = dict(sides.get("left") or []), dict(sides.get("right") or [])
-    return [(d, min(left[d], right[d])) for d in sorted(set(left) & set(right))]
-
-
-def _strength_detail(result, sc):
-    """Strength axis: one sub-test bar + field-test row + progress line per
-    targeted lift (from the engine's own per-lift scores; history from Hevy)."""
-    lifts = sc.get("lifts") or []
-    result["score"] = sc.get("score")
-    result["missing_lifts"] = sc.get("missing_lifts") or []
-    result["target_caption"] = ("bar = % of your per-lift e1RM target · "
-                                "dashed line = target (100%)")
-    sub, fields, series, below = [], [], [], []
-    for lf in lifts:
-        name, e1, tgt, s = lf["lift"], lf["e1rm"], lf["target"], lf["score"]
-        sub.append({"name": name, "score": s, "band": _band(s)})
-        hist = _hevy_best_by_date(name)
-        prev = hist[-2][1] if len(hist) >= 2 else None
-        fields.append({"name": name, "value_txt": _fmt_value("strength", e1),
-                       "chip": _chip(e1, tgt, prev, "higher")})
-        pts = [{"date": d, "value": v} for d, v in hist[-5:]]
-        if pts:
-            series.append({"name": name, "points": pts})
-        if s < 100:
-            below.append((s, name, e1, tgt))
-    result["sub_tests"] = sub
-    result["field_tests"] = fields
-    result["progress"] = {"series": series, "unit": "kg", "better": "higher",
-                          "caption": "e1RM per targeted lift over your recent sessions "
-                                     "(kg, higher is better)"}
-    below.sort()
-    if below:
-        s0, n0, e0, t0 = below[0]
-        status = (f"{n0} is furthest below target — {s0}% "
-                  f"({_fmt_value('strength', e0)} vs {_fmt_value('strength', t0)}).")
-        bullets = [f"{n}: {s}% of target ({_fmt_value('strength', e)} → "
-                   f"{_fmt_value('strength', t)})" for s, n, e, t in below[:3]]
-    else:
-        status = "Every targeted lift is at or above its e1RM target."
-        bullets = []
-    if result["missing_lifts"]:
-        bullets.append("No recent working sets for: "
-                       + ", ".join(result["missing_lifts"]) + " — log to score.")
-    result["summary"] = {"status_txt": status, "bullets": bullets}
-
-
-def _field_detail(result, axis, meta, sc):
-    """Single-field axes (endurance/speed/balance/flexibility): one scored
-    sub-test bar, the latest field value(s) + chip, and a raw-value progress
-    line over test history."""
-    kind, slug = meta["kind"], meta["slug"]
-    better = KIND_BETTER[kind]
-    score, tgt, res_val = sc.get("score"), sc.get("target"), sc.get("result")
-    result["score"] = score
-    result["stale"] = bool(sc.get("stale"))
-    result["days_since"] = sc.get("days_since")
-    tgt_txt = _fmt_value(kind, tgt)
-    result["target_caption"] = f"bar = % of your target · dashed line = target (100% = {tgt_txt})"
-    result["sub_tests"] = [{"name": meta["test_name"], "score": score, "band": _band(score)}]
-    direction = "higher is better" if better == "higher" else "lower is better"
-    if meta["unilateral"]:
-        sides = _fitness_history_sides(slug)
-        fields = []
-        for side in ("left", "right"):
-            h = sides.get(side) or []
-            if not h:
-                continue
-            val, prev = h[-1][1], (h[-2][1] if len(h) >= 2 else None)
-            fields.append({"name": f"{meta['test_name']} ({side})",
-                           "value_txt": _fmt_value(kind, val),
-                           "chip": _chip(val, tgt, prev, better)})
-        result["field_tests"] = fields
-        weaker = _weaker_by_date(sides)
-        pts = [{"date": d, "value": v} for d, v in weaker[-5:]]
-        result["progress"] = {"series": [{"name": "weaker side", "points": pts}] if pts else [],
-                              "unit": KIND_UNIT[kind], "better": better,
-                              "caption": f"Weaker-side {meta['test_name'].lower()} over your "
-                                         f"recent tests ({direction})"}
-    else:
-        hist = _fitness_history(slug, kind)
-        prev = hist[-2][1] if len(hist) >= 2 else None
-        result["field_tests"] = [{"name": meta["test_name"],
-                                  "value_txt": _fmt_value(kind, res_val),
-                                  "chip": _chip(res_val, tgt, prev, better)}]
-        pts = [{"date": d, "value": v} for d, v in hist[-5:]]
-        result["progress"] = {"series": [{"name": meta["test_name"], "points": pts}] if pts else [],
-                              "unit": KIND_UNIT[kind], "better": better,
-                              "caption": f"{meta['test_name']} over your recent tests ({direction})"}
-    status = (f"{meta['label']} is at {score}% of target "
-              f"({_fmt_value(kind, res_val)} vs target {tgt_txt}).")
-    bullets = []
-    gap = (tgt - res_val) if better == "higher" else (res_val - tgt)
-    if score is not None and score < 100 and gap and gap > 0:
-        bullets.append(f"{_fmt_value(kind, gap)} {'below' if better == 'higher' else 'over'} "
-                       "target — retest after a training block.")
-    if result["stale"]:
-        bullets.append(f"Last tested {result['days_since']} days ago — log a fresh test.")
-    result["summary"] = {"status_txt": status, "bullets": bullets}
-
+# ── §3c athletic drill pages: removed 2026-10-28 (owner decision — the
+# quarterly-test surface — Athletic Profile, Strength ratios, Quarter progress
+# and the mobility/strength-balance lenses — is out of this fork; the engine
+# commands stay dormant in health.py). #}
 
 @bp.get("/today")
 def today():
@@ -438,36 +228,6 @@ def muscle_radar():
         return jsonify(ok=False, error=str(exc)), 502
 
 
-@bp.get("/athletic-radar")
-def athletic_radar():
-    """§3c: 5-axis athletic radar. Engine JSON passes through verbatim — all
-    scoring (target-anchored 0–100, insufficient_data, staleness) is health.py."""
-    try:
-        return jsonify(ok=True, result=bridge.run("athletic-radar"))
-    except bridge.BridgeError as exc:
-        return jsonify(ok=False, error=str(exc)), 502
-
-
-@bp.get("/strength-ratios")
-def strength_ratios():
-    """§3d: agonist:antagonist ratios. `view` = tested|everyday; everything
-    (ratios, cited targets, flags, caveats) is computed in health.py."""
-    view = "everyday" if request.args.get("view") == "everyday" else "tested"
-    try:
-        return jsonify(ok=True, result=bridge.run("strength-ratios", "--view", view))
-    except bridge.BridgeError as exc:
-        return jsonify(ok=False, error=str(exc)), 502
-
-
-@bp.get("/fitness-tests")
-def fitness_tests():
-    """§3e: latest test per movement/side + quarter (priority) coverage."""
-    try:
-        return jsonify(ok=True, result=bridge.run("fitness-tests", "--days", "120"))
-    except bridge.BridgeError as exc:
-        return jsonify(ok=False, error=str(exc)), 502
-
-
 @bp.get("/vtaper")
 def vtaper():
     """§3f: V-taper WCR (waist ÷ chest, target ~0.7 — Garza 2017). Engine JSON
@@ -517,43 +277,6 @@ def muscle_map():
         return jsonify(ok=True, result=bridge.run("muscle-map", *args))
     except bridge.BridgeError as exc:
         return jsonify(ok=False, error=str(exc)), 502
-
-
-@bp.get("/athletic-detail")
-def athletic_detail():
-    """§3c drill-down: the per-axis breakdown behind one athletic-radar spoke.
-
-    Composes the engine's `athletic-radar` (the sole SCORE authority) with
-    raw test-history reads (db_read, SELECT-only) — NO bridge subcommand is
-    added. Returns a uniform shape the shared drill page renders: scored
-    sub-test bars, latest field values + deterministic chips, a progress line
-    over test history, and deterministic status prose. Honest empty (status
-    insufficient_data) until a target is set AND a test is logged."""
-    if (resp := _guard()) is not None:
-        return resp
-    axis = (request.args.get("axis") or "").strip().lower()
-    if axis not in AXIS_META:
-        return jsonify(ok=False, error="unknown athletic axis"), 400
-    meta = AXIS_META[axis]
-    try:
-        radar = bridge.run("athletic-radar")
-    except bridge.BridgeError as exc:
-        return jsonify(ok=False, error=str(exc)), 502
-    sc = (radar.get("scores") or {}).get(axis) or {}
-    result = {"axis": axis, "label": meta["label"],
-              "stale_after_days": radar.get("stale_after_days")}
-    if "score" not in sc:
-        # insufficient_data: no target set and/or no test logged (the honest,
-        # expected local state — the demo DB seeds neither).
-        result["status"] = "insufficient_data"
-        result["reason"] = sc.get("reason") or "No data for this axis yet."
-        return jsonify(ok=True, result=result)
-    result["status"] = "ok"
-    if axis == "strength":
-        _strength_detail(result, sc)
-    else:
-        _field_detail(result, axis, meta, sc)
-    return jsonify(ok=True, result=result)
 
 
 @bp.post("/log-set")

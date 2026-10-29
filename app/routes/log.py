@@ -23,7 +23,7 @@ ACTIVITY_WRITES = (
     "day-rating", "log", "log-set", "log-food", "eat", "prep", "set-batch",
     "commitment-set", "log-commitment", "checkin", "routine-set",
     "routine-remove", "routine-undo", "schedule-set", "write-note",
-    "hypothesis-promote", "hermes-model-set", "log-body-composition",
+    "hypothesis-promote", "log-body-composition",
     "import-hevy-upload",
 )
 

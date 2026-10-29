@@ -26,17 +26,13 @@ NAV = [
     ("core.dashboard", "Dashboard", "dash"),
     ("core.consistency", "Consistency", "consistency"),
     ("core.training", "Body", "training"),
-    ("core.mind", "Mind", "mind"),
     ("core.nutrition", "Nutrition", "nutrition"),
     ("core.recovery", "Recovery", "recovery"),
-    ("core.care", "External care", "care"),
-    ("core.labs", "Labs", "labs"),
     ("core.data", "Data Explorer", "data"),
-    ("core.insights", "Insight Explorer", "insights"),
 ]
 
 # Shown in the mobile bottom tab bar (the rest live behind "More").
-MOBILE_TABS = {"core.dashboard", "core.training", "core.nutrition", "core.mind"}
+MOBILE_TABS = {"core.dashboard", "core.training", "core.nutrition", "core.recovery"}
 
 # Endpoints reachable without a session. Everything else is gated.
 PUBLIC_ENDPOINTS = {
@@ -86,13 +82,11 @@ def create_app(overrides: dict | None = None) -> Flask:
     from app.routes.core import bp as core_bp
     from app.routes.dash import bp as dash_bp
     from app.routes.log import bp as log_bp
-    from app.routes.chat import bp as chat_bp
     from app.routes.export import bp as export_bp
-    from app.routes.insights import bp as insights_bp
+    from app.routes.green_days import bp as green_days_bp
     from app.routes.integrations import bp as integrations_bp
     from app.routes.models import bp as models_bp
     from app.routes.nutrition import bp as nutrition_bp
-    from app.routes.labs import bp as labs_bp
     from app.routes.plans import bp as plans_bp
     from app.routes.training import bp as training_bp
     from app.routes.recovery import bp as recovery_bp
@@ -106,12 +100,10 @@ def create_app(overrides: dict | None = None) -> Flask:
     app.register_blueprint(plans_bp)
     app.register_blueprint(nutrition_bp)
     app.register_blueprint(recovery_bp)
-    app.register_blueprint(labs_bp)
     app.register_blueprint(models_bp)
     app.register_blueprint(export_bp)
-    app.register_blueprint(chat_bp)
-    app.register_blueprint(insights_bp)
     app.register_blueprint(integrations_bp)
+    app.register_blueprint(green_days_bp)
 
     @app.before_request
     def require_login():

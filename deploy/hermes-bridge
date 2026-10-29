@@ -92,17 +92,15 @@ if BRIDGE_PROFILE == "dashboard-green-days-readonly":
     )}
 elif BRIDGE_PROFILE != "standard":
     raise RuntimeError("unknown hermes-bridge profile")
-# panel subcommand -> hermesctl subcommand (everything else goes to health.py)
-HERMESCTL_CMDS = {"hermes-status": "status", "hermes-spend": "spend",
-                  "hermes-model-set": "model-set", "fitbit-status": "fitbit-status",
-                  "hermes-chat": "chat"}
+# (fork 2026-10-28: every hermesctl-backed subcommand left the allowlist with
+# the Models & spend / chat features — the mapping below is empty and stays
+# only so an accidental CLI call fails loudly instead of reaching health.py.)
+HERMESCTL_CMDS = {}
 # model-set restarts the gateway + health-checks + may roll back: needs longer.
 # Phase 4 performs fixed 2,000-iteration resampling in the standard library;
 # the measured broad read has its own budget below the web-worker ceiling, allowing
 # materially more time than the legacy 60s bridge default.
 TIMEOUTS = {
-    "hermes-model-set": 150,
-    "hermes-chat": 120,
     "outcome-associations": OUTCOME_ANALYSIS_TIMEOUT,
     # Evidence replays all modes and pairs before selecting one exact finding.
     "finding-evidence": OUTCOME_ANALYSIS_TIMEOUT,
@@ -154,10 +152,6 @@ def _audit(record):
 REDACT_FLAGS = {"--why", "--note"}
 _SHA256_ID = re.compile(r"^sha256:[0-9a-f]{64}$")
 _FEATURE_KEY = re.compile(r"^[a-z0-9][a-z0-9._-]{0,159}$")
-_PANEL_SESSION = re.compile(
-    r"^(?:hermes-panel|hermes-panel-pain|hermes-panel-mobility|"
-    r"hermes-panel-c-[0-9a-f]{32})$"
-)
 _HYPOTHESIS_STATUSES = {
     "candidate", "exploratory", "strengthening", "replicated",
     "weakened", "rejected", "dormant",
@@ -168,7 +162,6 @@ def _phase5_values(subcmd, args):
     """Defense-in-depth for the exact Phase 5 panel-safe surface."""
     if subcmd not in {
         "hypothesis-promote", "hypotheses", "hypothesis-brief",
-        "synthesis-history", "insight-run-status",
     }:
         return None
     flags = {}
@@ -218,8 +211,6 @@ def _phase5_values(subcmd, args):
             return "invalid hypothesis status"
         if "--outcome" in flags and not _FEATURE_KEY.fullmatch(flags["--outcome"]):
             return "invalid hypothesis outcome"
-        return None
-    if subcmd in {"synthesis-history", "insight-run-status"}:
         return None
 
     required = {"--outcome", "--finding-id", "--input-fingerprint"}
@@ -465,14 +456,6 @@ def _validate(subcmd, args):
             if "=" not in a and flag not in NO_VALUE_FLAGS:
                 i += 1   # the next token is this flag's VALUE ("-felt tired" is data)
         i += 1
-    if subcmd == "hermes-chat":
-        if (
-            len(args) != 2
-            or args[0] != "--session"
-            or _PANEL_SESSION.fullmatch(args[1]) is None
-        ):
-            return "invalid panel chat session"
-        return None
     if subcmd == "readiness":
         if not args:
             return None
@@ -555,33 +538,6 @@ def _audit_argv(subcmd, args):
     return red
 
 
-def _chat_audit(stdin):
-    """Hash the two private panel-turn parts separately, never their text."""
-    raw = (stdin or "").encode("utf-8")
-    fallback = {
-        "stdin_bytes": len(raw),
-        "stdin_sha256": hashlib.sha256(raw).hexdigest(),
-    }
-    try:
-        turn = json.loads(stdin)
-        message = turn["message"]
-        context = turn["context"]
-        if not isinstance(message, str) or not isinstance(context, dict):
-            return fallback
-        message_raw = message.encode("utf-8")
-        context_raw = json.dumps(
-            context, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-        ).encode("utf-8")
-    except (TypeError, ValueError, KeyError):
-        return fallback
-    return {
-        "message_bytes": len(message_raw),
-        "message_sha256": hashlib.sha256(message_raw).hexdigest(),
-        "context_bytes": len(context_raw),
-        "context_sha256": hashlib.sha256(context_raw).hexdigest(),
-    }
-
-
 def handle(subcmd, args, peer_uid, stdin=None, user=None):
     argv = [subcmd, *args]
     audit_argv = _audit_argv(subcmd, args)   # --why/--note values never verbatim
@@ -622,9 +578,7 @@ def handle(subcmd, args, peer_uid, stdin=None, user=None):
     # is logged only by byte-length + a sha256, never verbatim — enough to later
     # verify WHICH content was written without leaking it.
     intent = {"ts": ts, "uid": peer_uid, "user": user, "argv": audit_argv, "phase": "intent"}
-    if stdin is not None and subcmd == "hermes-chat":
-        intent.update(_chat_audit(stdin))
-    elif stdin is not None:
+    if stdin is not None:  # fork 2026-10-28: the hermes-chat special case is gone
         raw = stdin.encode("utf-8")
         intent["stdin_bytes"] = len(raw)
         intent["stdin_sha256"] = hashlib.sha256(raw).hexdigest()

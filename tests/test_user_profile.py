@@ -274,28 +274,6 @@ def _client_as(app, user_id):
     return client
 
 
-def test_dash_medication_grouping_differs_per_user(profile_dash_app):
-    owner = _client_as(profile_dash_app, BOOTSTRAP_USER_ID)
-    guest = _client_as(profile_dash_app, "guest")
-
-    owner_safety = owner.get("/api/dash/safety").get_json()
-    guest_safety = guest.get("/api/dash/safety").get_json()
-    assert owner_safety["medication"] == "medication"
-    assert owner_safety["doses"][0]["dose_total_mg"] == 5.0
-    assert guest_safety["medication"] == "guest-med"
-    assert guest_safety["doses"][0]["dose_total_mg"] == 7.0
-
-
-def test_dash_medication_falls_back_on_invalid_profile(profile_dash_app):
-    """The panel read is display-only (no write to refuse): an invalid
-    profile.json falls back to installation config instead of 500ing the
-    dashboard — see app.users.current_profile's docstring for why this
-    differs from the broker's fail-closed write path."""
-    broken = _client_as(profile_dash_app, "broken")
-    safety = broken.get("/api/dash/safety").get_json()
-    assert safety["medication"] == "medication"
-    assert safety["doses"][0]["dose_total_mg"] == 9.0
-
 
 # -------------------------------------------------------------------- CLI
 def test_cli_user_profile_lifecycle(tmp_path):

@@ -11,8 +11,8 @@
   if (typeof echarts === "undefined" || !window.HermesCharts) return;
   const { localISO, isoDaysAgo, fetchJSON, pal, tip, barsOpt, lineOpt } = window.HermesCharts;
 
-  const state = { days: 90, source: "all", metrics: [], body: [], subjective: [], safety: null, env: null,
-    sleepLog: [], workouts: [], hevyVolume: [], water: [] };
+  const state = { days: 90, source: "all", metrics: [], body: [], subjective: [],
+    sleepLog: [], hevyVolume: [], water: [] };
   const charts = {};
 
   function chart(id) {
@@ -133,60 +133,9 @@
     chart("ch-body").setOption(o);
   }
 
-  function moodChart() {
-    const cutoff = state.days === "all" ? "" : isoDaysAgo(state.days);
-    const rows = state.subjective.filter(r => r.date >= cutoff);
-    const P = pal();
-    // colors follow the Mind page's mood/focus precedent (accent solid /
-    // warn dashed); energy gets the third semantic hue (good).
-    const defs = [["focus", P.warn, true], ["energy", P.good, false], ["mood", P.accent, false]];
-    const series = defs.map(([f, c, dash]) => ({
-      name: f, type: "line", smooth: true, symbol: "circle", symbolSize: 4, connectNulls: true,
-      data: rows.filter(r => r[f] != null).map(r => [r.date, r[f]]),
-      lineStyle: { width: 2, type: dash ? "dashed" : "solid", color: c }, itemStyle: { color: c },
-    })).filter(s => s.data.length);
-    if (!series.length) return empty("ch-mood", "Rate a day to see trends");
-    const o = Object.assign(timeAxes(), { series });
-    o.yAxis.min = 1; o.yAxis.max = 5; o.yAxis.scale = false;
-    o.legend = { top: 0, right: 0, textStyle: { color: P.muted, fontSize: 10 } };
-    chart("ch-mood").setOption(o);
-  }
+  /* fork 2026-10-28: mood (Mind), medication/vitals (safety) and weather/air
+     charts were removed with their cards (owner decision). */
 
-  function safetyChart() {
-    const { vitals, doses } = state.safety || { vitals: [], doses: [] };
-    const cutoff = state.days === "all" ? "" : isoDaysAgo(state.days);
-    const v = vitals.filter(r => r.date >= cutoff);
-    const d = doses.filter(r => r.date >= cutoff);
-    if (!v.length && !d.length) return empty("ch-safety", "Log BP (and meds) to power the safety chart");
-    const pick = (f) => v.filter(r => r[f] != null).map(r => [r.date, r[f]]);
-    const P = pal();
-    const o = timeAxes();
-    o.grid.right = 44;
-    // right axis (dose, mg) stays unnamed for the same reason as bodyChart's
-    // "cm" axis — a name there collides with the top-right legend.
-    o.yAxis = [Object.assign({}, o.yAxis, { name: "mmHg / bpm" }),
-               Object.assign({}, o.yAxis, { splitLine: { show: false } })];
-    o.legend = { top: 0, right: 0, textStyle: { color: P.muted, fontSize: 10 } };
-    o.series = [
-      { name: "systolic", type: "line", data: pick("systolic"), symbol: "circle", symbolSize: 6, connectNulls: true,
-        lineStyle: { width: 2, color: P.bad }, itemStyle: { color: P.bad },
-        markLine: { silent: true, symbol: "none",
-          lineStyle: { type: "dashed", color: P.bad },
-          label: { color: P.muted, formatter: "{c}" },
-          data: [{ yAxis: 135 }, { yAxis: 85 }] } },
-      { name: "diastolic", type: "line", data: pick("diastolic"), symbol: "circle", symbolSize: 6, connectNulls: true,
-        lineStyle: { width: 2, color: P.warn }, itemStyle: { color: P.warn } },
-      { name: "resting HR", type: "line", data: pick("resting_hr"), symbol: "circle", symbolSize: 5, connectNulls: true,
-        lineStyle: { width: 1.5, color: P.accent }, itemStyle: { color: P.accent } },
-      { name: "dose", type: "line", step: "end", yAxisIndex: 1, symbol: "circle", symbolSize: 4,
-        data: d.map(r => [r.date, r.dose_total_mg]),
-        lineStyle: { width: 2, color: P.good }, itemStyle: { color: P.good },
-        areaStyle: { opacity: 0.08, color: P.good } },
-    ];
-    chart("ch-safety").setOption(o);
-  }
-
-  /* ---------- task-52: raw-data gallery additions ---------- */
 
   /* Per-source Map(date -> value) for one daily_metrics column, respecting
      the Source filter. Like bySource() but WITHOUT the line-chart gap-break
@@ -364,38 +313,6 @@
     chart("ch-water").setOption(barsOpt(cats, vals, pal().accent, false));
   }
 
-  /* Apple Health `workouts` (cardio/other — distinct from Hevy's strength
-     sets below): one dimension (minutes/kcal/km) stacked by type per chart,
-     dynamic type list so a new workout type just gets the next palette color
-     rather than needing a code change. Parameterized over `field` (task-52
-     fix wave: kcal/km were already fetched by /api/dash/workouts but only
-     minutes had a chart — review finding); each dimension is honestly empty
-     on its own (a workout with minutes but no kcal doesn't fake a 0 bar). */
-  function workoutsFieldChart(id, field, unit, emptyLabel) {
-    const rows = state.workouts.filter((r) => r[field] != null);
-    if (!rows.length) return empty(id, emptyLabel);
-    const P = pal();
-    const dates = [...new Set(rows.map((r) => r.date))].sort();
-    const cats = dates.map((d) => d.slice(5));
-    const types = [...new Set(rows.map((r) => r.type))];
-    // panel.css's --ch-1..--ch-6 categorical sequence (accent/good/bad/warn/
-    // hero-label/muted) — the palette for "however many categories show up",
-    // same var set training.js's muscle-balance chart reads directly.
-    const palette = [P.accent, P.good, P.bad, P.warn, P.hero, P.muted];
-    const byTypeDate = new Map(rows.map((r) => [`${r.type}|${r.date}`, r[field]]));
-    const o = categoryAxes(cats);
-    o.tooltip.valueFormatter = (v) => (v == null ? "—" : v + " " + unit);
-    o.legend = { top: 0, right: 0, textStyle: { color: P.muted, fontSize: 10 } };
-    o.yAxis.name = unit;
-    o.series = types.map((t, i) => ({
-      name: t, type: "bar", stack: "x",
-      data: dates.map((d) => (byTypeDate.has(`${t}|${d}`) ? byTypeDate.get(`${t}|${d}`) : null)),
-      itemStyle: { color: palette[i % palette.length], borderRadius: i === types.length - 1 ? [3, 3, 0, 0] : 0 },
-      barWidth: "46%", emphasis: { focus: "series" },
-    }));
-    chart(id).setOption(o);
-  }
-
   /* hevy_sets daily training volume, aggregated server-side (SUM(weight*reps)
      + set count — a client can't re-derive that sum without every set row).
      Bar = volume (the additive quantity), line on a secondary axis = set
@@ -440,85 +357,12 @@
     chart("ch-dayrating").setOption(o);
   }
 
-  function weatherChart() {
-    const rows = (state.env && state.env.weather_history) || [];
-    const cutoff = state.days === "all" ? "" : isoDaysAgo(state.days);
-    const w = rows.filter((r) => r.date >= cutoff);
-    if (!w.length) return empty("ch-weather", "No weather rows yet");
-    const P = pal();
-    const o = timeAxes();
-    o.grid.right = 44;
-    o.yAxis = [Object.assign({}, o.yAxis, { name: "°C" }),
-               Object.assign({}, o.yAxis, { splitLine: { show: false } })];
-    o.legend = { top: 0, right: 0, textStyle: { color: P.muted, fontSize: 10 } };
-    o.series = [
-      { name: "temp min", type: "line", connectNulls: false,
-        data: w.filter((r) => r.temp_min_c != null).map((r) => [r.date, r.temp_min_c]),
-        smooth: true, symbol: "circle", symbolSize: 4,
-        lineStyle: { width: 2, color: P.accent }, itemStyle: { color: P.accent } },
-      { name: "temp max", type: "line", connectNulls: false,
-        data: w.filter((r) => r.temp_max_c != null).map((r) => [r.date, r.temp_max_c]),
-        smooth: true, symbol: "circle", symbolSize: 4,
-        lineStyle: { width: 2, type: "dashed", color: P.warn }, itemStyle: { color: P.warn } },
-      { name: "UV", type: "line", yAxisIndex: 1, connectNulls: false,
-        data: w.filter((r) => r.uv_index_max != null).map((r) => [r.date, r.uv_index_max]),
-        smooth: true, symbol: "circle", symbolSize: 4,
-        lineStyle: { width: 1.5, color: P.good }, itemStyle: { color: P.good } },
-    ];
-    chart("ch-weather").setOption(o);
-  }
-
-  function airChart() {
-    const rows = (state.env && state.env.air_history) || [];
-    const cutoff = state.days === "all" ? "" : isoDaysAgo(state.days);
-    const a = rows.filter((r) => r.date >= cutoff);
-    if (!a.length) return empty("ch-air", "No air-quality rows yet");
-    const P = pal();
-    const series = [
-      { name: "AQI mean", type: "line", connectNulls: false,
-        data: a.filter((r) => r.european_aqi_mean != null).map((r) => [r.date, r.european_aqi_mean]),
-        smooth: true, symbol: "circle", symbolSize: 4,
-        lineStyle: { width: 2, color: P.accent }, itemStyle: { color: P.accent } },
-      { name: "AQI max", type: "line", connectNulls: false,
-        data: a.filter((r) => r.european_aqi_max != null).map((r) => [r.date, r.european_aqi_max]),
-        smooth: true, symbol: "circle", symbolSize: 4,
-        lineStyle: { width: 1.5, type: "dashed", color: P.warn }, itemStyle: { color: P.warn } },
-    ];
-    const o = Object.assign(timeAxes(), { series });
-    o.legend = { top: 0, right: 0, textStyle: { color: P.muted, fontSize: 10 } };
-    chart("ch-air").setOption(o);
-  }
-
-  function envCard() {
-    const { weather: w, air: a } = state.env || {};
-    const set = (id, t) => { document.getElementById(id).textContent = t; };
-    const today = localISO(new Date());
-    const asOf = (row) => (row.date && row.date !== today ? ` (as of ${row.date})` : "");
-    if (w) {
-      set("env-weather", `${w.condition || "—"}, ${w.temp_min_c ?? "?"}–${w.temp_max_c ?? "?"} °C${asOf(w)}`);
-      set("env-uv", `UV ${w.uv_index_max ?? "—"} · ${w.sunshine_hours ?? "—"} h sun`);
-    }
-    if (a) {
-      set("env-aqi", `AQI ${a.european_aqi_mean ?? "—"} (max ${a.european_aqi_max ?? "—"})${asOf(a)}`);
-      set("env-pollen", `grass ${a.grass_pollen ?? "—"} · birch ${a.birch_pollen ?? "—"}`);
-    }
-  }
-
   /* §body-composition (fork owner decision 2026-10-27): the panel only
      renders health.py's `body-composition` read-model; it computes no
      numbers itself. Independent of the page's day-range dropdown — scans
-     are episodic (like labs), so this always asks for a generous fixed
+     are episodic, so this always asks for a generous fixed
      window rather than tracking Week/Month/Quarter/Year/All. */
   const BC_TREND_DAYS = 3650;
-  const csrf = document.querySelector('meta[name="csrf-token"]').content;
-  async function postJSON(url, body) {
-    const res = await fetch(url, { method: "POST", credentials: "same-origin",
-      headers: { "Content-Type": "application/json", "X-CSRFToken": csrf }, body: JSON.stringify(body) });
-    let data = {};
-    try { data = await res.json(); } catch (_) { /* non-JSON error body */ }
-    if (!res.ok || data.ok === false) throw new Error(data.error || ("HTTP " + res.status));
-    return data;
-  }
 
   function bcFlag(evaluation) {
     if (!evaluation) return '<span class="muted micro">—</span>';
@@ -636,22 +480,6 @@
     }
   }
 
-  document.getElementById("bc-submit").addEventListener("click", async () => {
-    const msg = document.getElementById("bc-submit-msg");
-    const raw = document.getElementById("bc-paste").value.trim();
-    msg.textContent = "";
-    let body;
-    try { body = JSON.parse(raw); } catch (e) { msg.textContent = "Invalid JSON: " + e.message; return; }
-    try {
-      await postJSON("/log/body-composition", body);
-      msg.textContent = "Logged.";
-      document.getElementById("bc-paste").value = "";
-      loadBodyComposition();
-    } catch (e) {
-      msg.textContent = e.message;
-    }
-  });
-
   const FEED_LABEL = {
     "bridge.day-rating": "Day rating", "bridge.log": "Logged", "bridge.eat": "Ate a portion",
     "bridge.log-food": "Logged food", "bridge.log-set": "Logged set",
@@ -682,8 +510,6 @@
     metricChart("ch-sleep", "sleep_hours");
     metricChart("ch-steps", "steps");
     bodyChart();
-    moodChart();
-    safetyChart();
     // task-52 additions — daily_metrics/body_metrics extra columns ride
     // along on the same state.metrics/state.body already loaded above.
     metricChart("ch-resp", "respiratory_rate");
@@ -699,53 +525,41 @@
     bodyFatChart();
     sleepStagesChart();
     timeAsleepChart();
-    workoutsFieldChart("ch-workouts", "minutes", "min", "No workouts logged yet (Apple Health sync)");
-    workoutsFieldChart("ch-workoutskcal", "kcal", "kcal", "No workout kcal logged yet (Apple Health sync)");
-    workoutsFieldChart("ch-workoutskm", "km", "km", "No workout distance logged yet (Apple Health sync)");
     hevyVolumeChart();
-    weatherChart();
-    airChart();
     dayRatingChart();
     waterChart();
-    envCard();
   }
   function renderAll() { renderRange(); loadFeed(); }
 
   async function loadRange() {
-    const [m, b, s, wo, hv, ev] = await Promise.all([
+    const [m, b, s, hv] = await Promise.all([
       fetchJSON(`/api/dash/metrics?days=${state.days}`),
       fetchJSON(`/api/dash/body?days=${state.days}`),
       fetchJSON(`/api/dash/sleep?days=${state.days}`),
-      fetchJSON(`/api/dash/workouts?days=${state.days}`),
       fetchJSON(`/api/dash/hevy-volume?days=${state.days}`),
-      fetchJSON(`/api/dash/env?days=${state.days}`),
     ]);
     state.metrics = m.rows; state.body = b.rows; state.sleepLog = s.rows;
-    state.workouts = wo.rows; state.hevyVolume = hv.rows; state.env = ev;
+    state.hevyVolume = hv.rows;
   }
 
   const RANGE_CHARTS = ["ch-rhr", "ch-hrv", "ch-sleep", "ch-steps", "ch-body",
     "ch-resp", "ch-spo2", "ch-walkhr", "ch-hrrange",
     "ch-activekcal", "ch-basalkcal", "ch-exercise", "ch-distance", "ch-flights",
     "ch-measurements", "ch-bodyfat", "ch-sleepstages", "ch-timeasleep",
-    "ch-workouts", "ch-workoutskcal", "ch-workoutskm", "ch-hevyvol",
-    "ch-weather", "ch-air"];
+    "ch-hevyvol"];
 
   async function boot() {
-    const [subj, safety, water, range] = await Promise.allSettled([
+    const [subj, water, range] = await Promise.allSettled([
       // These datasets are filtered locally, including when All is selected.
       fetchJSON("/api/dash/subjective?days=all"),
-      fetchJSON("/api/dash/safety?days=all"),
       fetchJSON("/api/nutrition/water?days=all"),
       loadRange(),
     ]);
     if (subj.status === "fulfilled") state.subjective = subj.value.rows;
-    if (safety.status === "fulfilled") state.safety = safety.value;
     if (water.status === "fulfilled") state.water = water.value.rows;
     renderAll();
     if (range.status === "rejected") RANGE_CHARTS.forEach(id => empty(id, range.reason.message));
-    if (subj.status === "rejected") { empty("ch-mood", subj.reason.message); empty("ch-dayrating", subj.reason.message); }
-    if (safety.status === "rejected") empty("ch-safety", safety.reason.message);
+    if (subj.status === "rejected") empty("ch-dayrating", subj.reason.message);
     if (water.status === "rejected") empty("ch-water", water.reason.message);
     loadBodyComposition();
   }

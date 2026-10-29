@@ -200,32 +200,6 @@ def test_muscle_radar_reports_bridge_failure(client, monkeypatch):
     assert "broker down" in r.get_json()["error"]
 
 
-def test_athletic_radar_passes_through(client, monkeypatch):
-    canned = {"axes": ["strength"], "scores": {"strength": {"status": "insufficient_data"}}}
-    calls = []
-    monkeypatch.setattr(bridge, "run", lambda sub, *a, **k: (calls.append((sub, list(a))) or canned))
-    api = client.get("/api/training/athletic-radar").get_json()
-    assert api["ok"] and api["result"] == canned
-    assert calls == [("athletic-radar", [])]
-
-
-def test_strength_ratios_view_is_whitelisted(client, monkeypatch):
-    calls = []
-    monkeypatch.setattr(bridge, "run", lambda sub, *a, **k: (calls.append((sub, list(a))) or {"view": "tested"}))
-    client.get("/api/training/strength-ratios?view=everyday")
-    assert calls[-1] == ("strength-ratios", ["--view", "everyday"])
-    calls.clear()
-    client.get("/api/training/strength-ratios?view=../hack")   # anything ≠ everyday → tested
-    assert calls[-1] == ("strength-ratios", ["--view", "tested"])
-
-
-def test_fitness_tests_passes_through(client, monkeypatch):
-    calls = []
-    monkeypatch.setattr(bridge, "run", lambda sub, *a, **k: (calls.append((sub, list(a))) or {"tests": []}))
-    client.get("/api/training/fitness-tests")
-    assert calls[-1] == ("fitness-tests", ["--days", "120"])
-
-
 def test_vtaper_passes_through(client, monkeypatch):
     canned = {"insufficient_data": True, "target_wcr": 0.7}
     calls = []
@@ -291,16 +265,9 @@ def test_training_page_has_muscle_figure_cards(client):
                    'id="mf-front"',
                    'id="mf-back"', "vendor/body-muscles/body-muscles.umd.min.js",
                    "js/muscle-figure.js",
-                   # §3f Phase 2: the strength-balance lens tab + its
-                   # Combined|L/R sub-toggle (hidden until the lens is active)
-                   'data-tab="strength-balance"', 'id="mf-side"',
-                   'data-group="mfside"',
                    # §3g Phase 3: the pain lens tab + the read-only physio-loop
                    # side card (populated by training.js when the lens is active)
-                   'data-tab="pain"', 'id="mf-loop"',
-                   # §3h Phase 4: the mobility lens tab + the read-only mobility
-                   # detail card (per-test cited norms, filled by training.js)
-                   'data-tab="mobility"', 'id="mf-mobility"'):
+                   'data-tab="pain"', 'id="mf-loop"'):
         assert marker in html, marker
 
 
@@ -351,8 +318,6 @@ def test_pain_workspace_page_renders(client):
     for marker in (
         'data-lens="pain"',                 # the workspace JS reads the fixed lens
         'id="mf-front"', 'id="mf-back"',    # its own body map (front + back)
-        'id="rw-form"', 'id="rw-input"',    # the coach chat input (report path)
-        'aria-label="Message the Hermes coach"',
         'id="rw-selcount" aria-live="polite"',
         'id="mf-loop"',                     # the read-only physio-loop state card
         "vendor/body-muscles/body-muscles.umd.min.js",
@@ -365,14 +330,6 @@ def test_pain_workspace_page_renders(client):
     assert 'name="nrs"' not in html and 'type="number"' not in html
 
 
-def test_mobility_workspace_page_renders(client):
-    html = client.get("/training/mobility").get_data(as_text=True)
-    for marker in ('data-lens="mobility"', 'id="mf-front"', 'id="mf-back"',
-                   'id="rw-form"', 'id="mf-mobility"',
-                   "js/physio-render.js", "js/report_workspace.js"):
-        assert marker in html, marker
-
-
 def test_workspace_accepts_region_query_without_server_echo(client):
     # the pre-selected region travels in ?region= and is read CLIENT-side only
     # (never echoed into the server-rendered HTML) — so a hostile region value
@@ -380,20 +337,20 @@ def test_workspace_accepts_region_query_without_server_echo(client):
     r = client.get("/training/pain?region=%3Cscript%3Ex")
     assert r.status_code == 200
     assert b"<script>x" not in r.data
-    r = client.get("/training/mobility?region=quadriceps-left")
-    assert r.status_code == 200
 
 
 def test_new_training_reads_report_bridge_failure(client, monkeypatch):
     def boom(*a, **k):
         raise bridge.BridgeError("broker down")
     monkeypatch.setattr(bridge, "run", boom)
-    for url in ("/api/training/athletic-radar", "/api/training/strength-ratios",
-                "/api/training/fitness-tests", "/api/training/vtaper",
+    for url in ("/api/training/vtaper",
                 "/api/training/muscle-detail?group=Glutes",
-                "/api/training/muscle-map",
-                "/api/training/athletic-detail?axis=strength"):
+                "/api/training/muscle-map"):
         assert client.get(url).status_code == 502
+    # fork 2026-10-28: the quarterly-test endpoints are 404 (route removed)
+    for gone in ("/api/training/athletic-radar", "/api/training/strength-ratios",
+                 "/api/training/fitness-tests", "/api/training/mobility"):
+        assert client.get(gone).status_code == 404
 
 
 # ── §3c athletic drill endpoint + pages ──────────────────────────────────────
@@ -403,68 +360,6 @@ def _mock_radar(monkeypatch, scores):
     canned = {"axes": ["strength", "endurance", "speed", "balance", "flexibility"],
               "scores": scores, "stale_after_days": 120}
     monkeypatch.setattr(bridge, "run", lambda sub, *a, **k: canned)
-
-
-def test_athletic_detail_rejects_unknown_axis(client):
-    """Off-whitelist axis is refused before the bridge is ever called (400)."""
-    assert client.get("/api/training/athletic-detail?axis=vertical").status_code == 400
-    assert client.get("/api/training/athletic-detail").status_code == 400
-
-
-def test_athletic_detail_insufficient_is_honest(client, monkeypatch):
-    """The demo-DB state: no target/test → status insufficient_data, no cards."""
-    _mock_radar(monkeypatch, {"endurance": {"status": "insufficient_data",
-                                            "reason": "no target set", "test": "run-3k"}})
-    d = client.get("/api/training/athletic-detail?axis=endurance").get_json()["result"]
-    assert d["status"] == "insufficient_data"
-    assert d["label"] == "Endurance" and d["reason"] == "no target set"
-    assert "sub_tests" not in d
-
-
-def test_athletic_detail_field_axis_shape_and_chip(client, monkeypatch):
-    """Endurance (single timed field test): sub-test band, improving chip from
-    real history (960s beats the prior 990s, lower is better), progress line,
-    and a deterministic below-target gap bullet."""
-    _mock_radar(monkeypatch, {"endurance": {
-        "score": 94, "test": "run-3k", "result": 960.0, "target": 900.0,
-        "tested_date": "2026-06-01", "stale": False, "days_since": 46}})
-    con = sqlite3.connect(client.hdb)
-    con.executemany(
-        "INSERT INTO fitness_tests(date, movement, side, seconds, source) VALUES(?,?,?,?,?)",
-        [("2026-05-01", "run-3k", "bilateral", 990.0, "chat"),
-         ("2026-06-01", "run-3k", "bilateral", 960.0, "chat")])
-    con.commit(); con.close()
-    d = client.get("/api/training/athletic-detail?axis=endurance").get_json()["result"]
-    assert d["status"] == "ok" and d["score"] == 94
-    assert d["sub_tests"] == [{"name": "3 km run", "score": 94, "band": "warn"}]
-    assert d["field_tests"][0]["value_txt"] == "16:00"      # 960s → mm:ss
-    assert d["field_tests"][0]["chip"] == "improving"       # 960 < prior 990
-    assert [p["value"] for p in d["progress"]["series"][0]["points"]] == [990.0, 960.0]
-    assert d["summary"]["bullets"]                          # gap-to-target bullet present
-
-
-def test_athletic_detail_strength_axis_uses_engine_lifts(client, monkeypatch):
-    """Strength (multi-lift Hevy axis): one sub-test bar + field row per targeted
-    lift, e1RM progress from the seeded Front Squat history, and a
-    furthest-below-target summary — all off the engine's per-lift scores."""
-    _mock_radar(monkeypatch, {"strength": {
-        "score": 55, "test": "hevy-e1rm", "missing_lifts": [],
-        "lifts": [{"lift": "Front Squat", "e1rm": 82.3, "target": 150.0, "score": 55}]}})
-    d = client.get("/api/training/athletic-detail?axis=strength").get_json()["result"]
-    assert d["status"] == "ok"
-    assert d["sub_tests"] == [{"name": "Front Squat", "score": 55, "band": "bad"}]
-    assert d["field_tests"][0]["name"] == "Front Squat"
-    assert d["field_tests"][0]["value_txt"] == "82.3 kg"
-    # Front Squat is seeded twice (60kg→65kg) → improving, two progress points
-    assert d["field_tests"][0]["chip"] == "improving"
-    assert len(d["progress"]["series"][0]["points"]) == 2
-    assert "Front Squat" in d["summary"]["status_txt"]
-
-
-def test_athletic_detail_page_renders_and_404s(client):
-    r = client.get("/training/athletic/strength")
-    assert r.status_code == 200 and b"athletic breakdown" in r.data
-    assert client.get("/training/athletic/bogus").status_code == 404
 
 
 def test_log_set_maps_to_bridge(client):

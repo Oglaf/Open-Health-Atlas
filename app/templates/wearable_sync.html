@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Wearable sync{% endblock %}
+{% block content %}
+{# Wearable sync (fork owner decision 2026-10-28; replaces Models & spend —
+   the model-switch and spend cards were hermesctl features with no backend
+   on this deployment). One card: the scheduled Google Health collector's
+   last run + the latest fitbit data date, from the user's own DB. #}
+<div class="vstack">
+  <div class="row-top between wrap">
+    <div class="crumb">
+      <a class="back" href="{{ url_for('core.dashboard') }}">◱ Hub</a>
+      <h1 class="page-title">Wearable sync</h1>
+      <span class="muted micro">the scheduled collector pushing your watch data</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3 class="card-title mb-2">Google Health collector</h3>
+    <dl class="env">
+      <div><dt>Last successful run</dt><dd id="ws-last-ok">—</dd></div>
+      <div><dt>Last run of any kind</dt><dd id="ws-last-run">—</dd></div>
+      <div><dt>Data latest date</dt><dd id="ws-latest">—</dd></div>
+      <div><dt>Freshness</dt><dd id="ws-fresh">—</dd></div>
+      <div><dt>Days with data (last 30)</dt><dd id="ws-days30">—</dd></div>
+    </dl>
+    <p class="field-hint">Fresh = data within the last 3 days. Stale means the
+    collector has not landed data recently; check the collector container's
+    logs. "No sync yet" means the collector has never written to this
+    account.</p>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/wearable_sync.js') }}" defer></script>
+{% endblock %}

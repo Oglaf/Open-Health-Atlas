@@ -7,11 +7,6 @@ from app import db_read, users
 
 bp = Blueprint("core", __name__)
 
-# §3c: the five athletic-radar axes, a fixed UI contract (matches the engine's
-# axes list). Off-list slugs 404 rather than render a dead drill page.
-ATHLETIC_AXES = ("strength", "endurance", "speed", "balance", "flexibility")
-
-
 @bp.get("/training")
 def training():
     return render_template("training.html")
@@ -25,42 +20,11 @@ def muscle_detail(group):
     return render_template("muscle_detail.html", group=group)
 
 
-@bp.get("/training/athletic/<axis>")
-def athletic_detail(axis):
-    """§3c drill-down page shell for one athletic-radar axis. The axis is
-    validated here against the fixed whitelist (404 otherwise); the page's JS
-    then calls /api/training/athletic-detail for the real data."""
-    axis = axis.lower()
-    if axis not in ATHLETIC_AXES:
-        abort(404)
-    return render_template("athletic_detail.html",
-                           axis=axis, label=axis.capitalize())
-
-
-# §3f Task C — the two REPORT-lens WORKSPACE pages (Pain, Mobility). Reached by
-# clicking a region on the Body-map figure while its Pain/Mobility lens is
-# active (training.js routes explore→drill / report→here). Each page carries its
-# OWN body map (point at the exact spot, including several), a coach chat, and
-# the read-only physio-loop / mobility state — all from the SAME read-only
-# `muscle-map --lens <lens>` payload + the existing `/api/chat/send` agent path.
-#
-# DETERMINISM (Phase 3 decision 6): capture stays coach/agent-only. These shells
-# add NO writer — the lens is fixed server-side (a trusted literal, no user
-# input), and the pre-selected region rides ?region= read CLIENT-side only
-# (never echoed into the HTML, so no injection surface + no server region vocab
-# to police). The panel still never writes pain/mobility data.
 @bp.get("/training/pain")
 def pain_workspace():
     """Pain workspace: report a painful spot to the coach + see the cited
     physio loop. READ-ONLY for writes — the chat is the only capture path."""
     return render_template("report_workspace.html", lens="pain", label="Pain")
-
-
-@bp.get("/training/mobility")
-def mobility_workspace():
-    """Mobility workspace: point at a restricted area + discuss with the coach +
-    see the cited mobility screen. READ-ONLY for writes (chat is the capture)."""
-    return render_template("report_workspace.html", lens="mobility", label="Mobility")
 
 
 @bp.get("/consistency")
@@ -79,32 +43,6 @@ def consistency_habits():
     the classification windows (all-time + a fixed 30d) are fixed by the
     rules, not user-selectable."""
     return render_template("consistency_habits.html")
-
-
-@bp.get("/mind")
-def mind():
-    """Mind pillar (design v-mind): medication/social/general tabs — dose +
-    vitals context, mood/focus + user-defined assessments, brain-dump, honest
-    placeholders for what isn't logged yet (social, prescriber questions)."""
-    return render_template("mind.html")
-
-
-@bp.get("/mind/brain-dump")
-def mind_braindump():
-    """Brain-dump drill sub-page (task-31, design image 27). REAL data: every
-    subjective_daily.brain_dump entry newest-first (via /api/dash/subjective
-    days=all) + a deterministic current-streak chip (mind_braindump.js). No
-    new endpoint — rides the existing subjective read. Honest-empty when none."""
-    return render_template("mind_braindump.html")
-
-
-@bp.get("/mind/prescriber-questions")
-def mind_prescriber():
-    """Prescriber-questions drill sub-page (task-31, design image 27). There is
-    NO data source yet — the appointment-summary workflow that would collect
-    these questions doesn't feed the panel. So this is an honest-pending
-    scaffold (structure ready, zero fabricated questions), not a live page."""
-    return render_template("mind_prescriber.html")
 
 
 @bp.get("/recovery")
@@ -138,15 +76,6 @@ def recovery_detail(metric):
                            metric=metric, label=RECOVERY_LABELS[metric])
 
 
-@bp.get("/care")
-def care():
-    """Configurable care routines
-    over skincare_log + skincare_products (/api/dash/care). Unseeded on the
-    demo DB — every card renders its own honest empty state. No appointments
-    or diagnosis content by product design."""
-    return render_template("care.html")
-
-
 @bp.get("/plans")
 def plans():
     """Legacy Plans URL; the current consolidated surface is Body."""
@@ -164,8 +93,8 @@ def integrations():
     """Integrations & privacy settings page (design image 31, task-36): a
     read-only "Connected sources" status board (Telegram bot, Hevy, Wearable,
     Bloodwork lab) plus a short factual privacy note. Real data comes from
-    /api/integrations/sources (db_read + the existing hermes-status/
-    fitbit-status bridge reads — no new bridge subcommands); this page has
+    /api/integrations/sources (per-user db_read SELECTs — no bridge reads
+    on this deployment); this page has
     no controls of its own, so the Fitbit re-auth button stays on Models &
     spend rather than being duplicated here."""
     return render_template("integrations.html")
@@ -202,16 +131,13 @@ def recipe_detail(rid):
     return render_template("recipe_detail.html", rid=rid, name=name)
 
 
-@bp.get("/labs")
-def labs():
-    """§labs bloodwork view: panel-grouped results + per-test trend. Read-only;
-    the page's JS calls /api/labs (bridge → the `labs` read command)."""
-    return render_template("labs.html")
-
-
 @bp.get("/models")
 def models():
-    return render_template("models.html")
+    """Wearable sync page (fork owner decision 2026-10-28): the Models &
+    spend page keeps only data that exists on this deployment — the URL /
+    endpoint name are unchanged so old bookmarks still work, and the page
+    renders the wearable-sync card for ANY logged-in user."""
+    return render_template("wearable_sync.html")
 
 
 @bp.get("/export")
@@ -221,21 +147,10 @@ def export():
 
 @bp.get("/chat")
 def chat():
-    """Legacy Chat URL. Chat now lives embedded in Insight Explorer (same agent,
-    same /api/chat/* endpoints) — this is its one canonical home. 302 so
-    bookmarks survive the redesign."""
-    return redirect(url_for("core.insights"))
-
-
-@bp.get("/insights")
-def insights():
-    return render_template("insights.html")
-
-
-@bp.get("/insights/conversations")
-def insights_conversations():
-    """Cursor-paginated panel investigations, never Telegram conversations."""
-    return render_template("insights_conversations.html")
+    """Legacy Chat URL. The panel chat lives with Insight Explorer, which this
+    fork removed (owner decision 2026-10-28); no agent is installed on this
+    deployment, so /chat no longer has a destination and 404s."""
+    abort(404)
 
 
 @bp.get("/data")

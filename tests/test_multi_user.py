@@ -158,18 +158,19 @@ def test_disabled_user_session_rejected_immediately(two_user_app):
     assert guest.get("/api/plans/program").status_code == 401
 
 
-def test_non_owner_gets_403_on_chat_integrations_and_models(two_user_app):
+def test_integrations_and_models_are_per_user_not_owner_only(two_user_app):
+    """fork 2026-10-28: Integrations and the wearable-sync page read the
+    CURRENT user's own health DB — no owner-only gate, and the panel chat is
+    gone (404, not 403/200)."""
     guest = _client_as(two_user_app, "guest")
     owner = _client_as(two_user_app, BOOTSTRAP_USER_ID)
 
-    assert guest.get("/api/chat/conversations").status_code == 403
-    assert guest.get("/api/integrations/sources").status_code == 403
-    assert guest.get("/api/models/status").status_code == 403
+    assert guest.get("/api/chat/conversations").status_code == 404
+    assert guest.get("/api/integrations/sources").status_code in (200, 503)
+    assert guest.get("/api/models/status").status_code in (200, 503)
 
-    # The owner is unaffected — these routes are gated by role, not broken.
-    assert owner.get("/api/chat/conversations").status_code == 200
     assert owner.get("/api/integrations/sources").status_code in (200, 503)
-    assert owner.get("/api/models/status").status_code == 200
+    assert owner.get("/api/models/status").status_code in (200, 503)
 
 
 # ----------------------------------------------------------------- bridge
@@ -451,8 +452,8 @@ def test_passkey_login_and_registration_are_scoped_per_user(tmp_path):
     assert owner_opts["authenticatorSelection"]["residentKey"] == "preferred"
     assert bob_opts["authenticatorSelection"]["residentKey"] == "required"
 
-    assert owner_client.get("/api/models/status").status_code == 200
-    assert bob_client.get("/api/models/status").status_code == 403
+    assert owner_client.get("/api/models/status").status_code in (200, 503)
+    assert bob_client.get("/api/models/status").status_code in (200, 503)
 
     owner_client.post("/logout")
     bob_client.post("/logout")
@@ -464,7 +465,7 @@ def test_passkey_login_and_registration_are_scoped_per_user(tmp_path):
     assertion = bob_device.authenticate(r.get_data(as_text=True), origin=ORIGIN)
     r = bob_client.post("/api/auth/login/verify", json={"credential": assertion})
     assert r.status_code == 200 and r.get_json()["ok"] is True
-    assert bob_client.get("/api/models/status").status_code == 403
+    assert bob_client.get("/api/models/status").status_code in (200, 503)
 
     # An unknown username gets the same shape as a real one (no existence leak).
     r = bob_client.post("/api/auth/login/options", json={"username": "nobody-here"})
@@ -476,4 +477,4 @@ def test_passkey_login_and_registration_are_scoped_per_user(tmp_path):
     assertion = owner_device.authenticate(r.get_data(as_text=True), origin=ORIGIN)
     r = owner_client.post("/api/auth/login/verify", json={"credential": assertion})
     assert r.status_code == 200 and r.get_json()["ok"] is True
-    assert owner_client.get("/api/models/status").status_code == 200
+    assert owner_client.get("/api/models/status").status_code in (200, 503)

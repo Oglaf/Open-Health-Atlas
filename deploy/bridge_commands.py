@@ -50,14 +50,9 @@ COMMAND_FLAGS = {
     "log-food":      {"--grams", "--date", "--time", "--meal-type", "--source"},
     "set-batch":     {"--grams"},
     "prep":          {"--portions", "--batch-grams"},
-    # §3e/§3c/§3d — READS ONLY. Capture is Telegram-only and the panel is
-    # analysis-only; the writes (fitness-test-log, athletic-target-set,
-    # fitness-test-void) go through the agent's own health.py path / SSH, never
-    # the sandboxed panel — minimal attack surface.
-    "fitness-tests":       {"--days"},
-    "athletic-radar":      set(),
-    "strength-ratios":     {"--view"},
-    # §3f V-taper — read-only (import-hevy-body is collector-only, NOT here)
+    # §3f V-taper — read-only (import-hevy-body is collector-only, NOT here).
+    # Fork 2026-10-28: fitness-tests / athletic-radar / strength-ratios left
+    # the allowlist with their pages (owner removal decision).
     "vtaper":              {"--days"},
     # §3b drill-down — read-only (map seeding is SSH/agent-path, NOT here)
     "muscle-detail":       {"--days"},
@@ -66,9 +61,6 @@ COMMAND_FLAGS = {
     "muscle-map":          {"--lens", "--days", "--side-mode"},
     # §4b timing adherence — read-only (planned-time-set is NOT here)
     "timing-adherence":    {"--days"},
-    # §labs bloodwork — read-only view feed (capture, OCR ingestion and the
-    # cited catalog seed are collector-only, NOT here)
-    "labs":                {"--days", "--test", "--panel"},
     # §body-composition multi-frequency BIA report (fork owner decision
     # 2026-10-27, docs/PRODUCT_AUTHORITY.md): validated write (JSON on
     # stdin, no flags) + a bounded read.
@@ -114,22 +106,16 @@ COMMAND_FLAGS = {
     "analysis-job-status": set(),
     # Phase 5 ledger/synthesis. Identifier-only promotion recomputes the
     # finding in health.py. Every unrestricted writer remains absent.
+    # Fork 2026-10-28: hypotheses / hypothesis-brief / synthesis-history /
+    # insight-run-status left the allowlist with the removed Insight Explorer
+    # module (hypothesis-promote stays — the peer-review path).
     "hypothesis-promote": {
         "--outcome", "--finding-id", "--input-fingerprint",
         "--from", "--to", "--days", "--all",
     },
-    "hypotheses": {"--status", "--outcome", "--limit", "--before"},
-    "hypothesis-brief": set(),
-    "synthesis-history": {"--limit", "--before"},
-    # Phase 6 read-only redacted orchestration audit. Queue/outbox writers and
-    # every token-bearing command remain absent.
-    "insight-run-status": {"--limit"},
-    # agent/model operations -> hermesctl (runs as hermes), not health.py
-    "hermes-status":    set(),
-    "hermes-spend":     set(),
-    "hermes-model-set": set(),
-    "fitbit-status":    set(),
-    "hermes-chat":      {"--session"},   # message on stdin; fixed session validated by hermesctl
+    # Fork 2026-10-28: the hermesctl/agent operations (hermes-status,
+    # hermes-spend, hermes-model-set, fitbit-status) and hermes-chat left the
+    # allowlist with the Models & spend / panel-chat features they served.
     # Admin panel user lifecycle (docs/MULTI_USER.md "Admin UI"): one
     # positional target user id, zero flags. These never exec health.py or
     # hermesctl — the broker handles them in-process (see ADMIN_COMMANDS and
@@ -154,7 +140,8 @@ CLIENT_FLAG_CHECKS = {
     "feature-registry", "feature-frame", "data-readiness", "goal-list",
     "outcome-associations", "finding-evidence", "hypothesis-promote",
     "analysis-job-start", "analysis-job-status",
-    "hypotheses", "hypothesis-brief", "synthesis-history", "insight-run-status",
+    # (fork 2026-10-28: hypotheses/hypothesis-brief/synthesis-history/
+    #  insight-run-status left the set with the removed Insight Explorer module)
 }
 
 # store_true flags consume no following value; other allowed flags consume one.

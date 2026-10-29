@@ -37,15 +37,6 @@
     return "No data yet";
   }
 
-  function telegramRow(t) {
-    t = t || {};
-    const chipText = { connected: "Connected", not_running: "Not running" }[t.status] || "Status unknown";
-    let sub;
-    if (t.status === "connected") sub = [t.model, t.provider].filter(Boolean).join(" · ") || null;
-    else sub = t.error || null;
-    return row("Telegram bot", chipText, FLAG_CLASS[t.status] || "bd", sub);
-  }
-
   function hevyRow(h) {
     h = h || {};
     return row("Hevy (training)", syncChip(h.status, h.latest_date), FLAG_CLASS[h.status] || "bd");
@@ -60,14 +51,10 @@
       ? `Apple: retired ${apple.since} · archive imports occasionally`
       : "Apple: retired";
     const sub = `${appleBit} · Fitbit: ${w.fitbit_latest || "no data"}` +
-      ` (token: ${w.fitbit_auth_status || "unknown"})`;
+      (w.collector_last_run
+        ? ` · collector ${w.collector_last_run}`
+        : " · no sync yet — the collector container pushes data");
     return row("Wearable", syncChip(w.status, w.latest_date), FLAG_CLASS[w.status] || "bd", sub);
-  }
-
-  function labsRow(l) {
-    l = l || {};
-    const sub = l.latest_date ? `latest result: ${l.latest_date}` : "no results logged yet";
-    return row("Bloodwork lab", "Manual upload", "bd", sub);
   }
 
   async function boot() {
@@ -83,10 +70,8 @@
       return;
     }
     list.append(
-      telegramRow(data.telegram),
       hevyRow(data.hevy),
       wearableRow(data.wearable),
-      labsRow(data.labs),
     );
   }
   boot();

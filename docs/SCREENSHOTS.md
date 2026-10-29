@@ -37,6 +37,10 @@ producing a 2880 × 1568 PNG. The view was scrolled to the Muscle Balance and
 Athletic Profile charts and the front/back strength-balance diagrams. Browser
 tabs, the address bar and operating-system controls are outside the capture.
 
+Fork note (owner decision 2026-10-28, docs/PRODUCT_AUTHORITY.md): the Athletic
+Profile, strength-ratio and strength-balance surfaces shown in this historical
+capture were removed from this fork afterwards.
+
 This earlier read-only UI snapshot is retained as dated evidence. Its
 displayed values belong to that snapshot; this image does not establish a
 fresh calculation by the current engine. No chart, label, pixel or displayed
