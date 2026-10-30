@@ -9,7 +9,7 @@ import statistics
 
 from flask import Blueprint, jsonify, request
 
-from app import bridge, canon, db_read, users
+from app import bridge, canon, db_read
 
 bp = Blueprint("dash", __name__, url_prefix="/api/dash")
 
