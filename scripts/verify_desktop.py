@@ -129,7 +129,7 @@ def main():
             before = database_rows(database)
             assert journey.post("/desktop/api/preferences", {"key": "panel-theme", "value": "blue-glacier"})[0] == 200
             checks.append("empty_workspace_and_real_panel_broker_toolkit_write")
-            for path in ("/", "/training", "/nutrition", "/recovery", "/labs", "/desktop/help"):
+            for path in ("/", "/training", "/nutrition", "/recovery", "/data", "/desktop/help"):
                 assert journey.request(path)[0] == 200, "Retained page failed: " + path
             checks.append("retained_routes_rendered_no_browser_claim")
             journey.stop()

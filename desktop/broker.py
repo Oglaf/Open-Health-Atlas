@@ -50,11 +50,11 @@ def main():
     broker._audit = redacted_audit
     handle = broker.handle
 
-    def desktop_handle(command, arguments, uid, stdin=None):
+    def desktop_handle(command, arguments, uid, stdin=None, user=None):
         if command in broker.HERMESCTL_CMDS:
             return {"ok": False, "code": 2, "stdout": "", "stderr":
                     "Hermes is a separate connection. See Desktop Help for supported local AI clients."}
-        return handle(command, arguments, uid, stdin)
+        return handle(command, arguments, uid, stdin, user)
 
     broker.handle = desktop_handle
 
