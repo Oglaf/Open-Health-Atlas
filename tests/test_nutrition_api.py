@@ -24,7 +24,7 @@ SCHEMA = (pathlib.Path(__file__).resolve().parent.parent / "toolkit" / "SCHEMA.s
 
 @pytest.mark.parametrize("scenario", [
     "ready", "missing_profile", "missing_weight", "missing_configuration",
-    "transport_error", "batch_error",
+    "transport_error", "meal_share_of_goal",
 ])
 def test_browser_nutrition_target_states(scenario):
     node = shutil.which("node")

@@ -13,13 +13,12 @@
      matching target — never a fabricated %. See recipe_detail.js.
    - Ingredients: validated structured sidecar under personal/recipes,
      captured through health.py's agent-only recipe-ingredients-set command.
-   The header chip shows real batch metadata ("makes N") only; batch-logging
-   lives on the Recipes tab (single source), so there is no duplicate control
-   here. #}
+   The header chip shows real batch metadata ("makes N") only; there are no
+   consumption or batch-logging controls on this page. #}
 <div class="vstack">
   <div class="row-top between wrap">
     <div class="crumb">
-      <a class="back" href="{{ url_for('core.nutrition') }}">◱ Recipes</a>
+      <a class="back" href="{{ url_for('core.nutrition') }}">◱ Meals</a>
       <h1 class="page-title" id="rdTitle">{{ name or rid }}</h1>
     </div>
     <span class="chip" id="rdMakes" hidden></span>
@@ -31,7 +30,6 @@
       <div class="stat-row mt-2">
         <div class="stat"><span class="stat-label">CALORIES</span><span class="stat-value" id="rdKcal">—</span></div>
         <div class="stat"><span class="stat-label">PORTION</span><span class="stat-value" id="rdPortion">—</span></div>
-        <div class="stat"><span class="stat-label">IN FREEZER</span><span class="stat-value" id="rdFreezer">—</span></div>
       </div>
       <p class="stat-label mt-3 mb-1">MACROS / PORTION</p>
       <div class="goals-list" id="rdMacros"><p class="muted note-txt m0">Loading…</p></div>

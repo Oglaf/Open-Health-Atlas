@@ -129,7 +129,6 @@
       d.kcal_per_portion != null ? Math.round(d.kcal_per_portion) + " kcal" : "—";
     document.getElementById("rdPortion").textContent =
       rec.grams_per_portion != null ? Math.round(rec.grams_per_portion) + " g" : "—";
-    document.getElementById("rdFreezer").textContent = Math.round(d.portions_remaining || 0);
     renderIngredients(d);
 
     // macros
@@ -143,7 +142,13 @@
       // var() strings, not resolved colors — the browser re-themes them automatically
       const colors = { Protein: "var(--ink)", Carbs: "var(--good)", Fat: "var(--warn)" };
       const max = Math.max(...macros.map((m) => m.amount || 0));
-      macroEl.replaceChildren(...macros.map((m) => bar(m.name, m.amount, m.unit || "g", max, colors[m.name] || "var(--accent)")));
+      const mt = await fetchTargets();
+      const macroKey = { Protein: "protein_g", Carbs: "carbs_g", Fat: "fat_g" };
+      macroEl.replaceChildren(...macros.map((m) => {
+        const target = mt.status === "ok" && mt.targets[macroKey[m.name]];
+        const pctText = target && m.amount != null ? Math.round(m.amount / target.target * 100) + "% of daily goal" : "";
+        return bar(m.name, m.amount, m.unit || "g", max, colors[m.name] || "var(--accent)", pctText);
+      }));
     }
 
     // micronutrients — real amounts (primary) + real % of daily target (T47)

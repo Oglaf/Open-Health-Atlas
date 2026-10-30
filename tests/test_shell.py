@@ -151,39 +151,33 @@ def test_nutrition_page_renders(authed):
     r = authed.get("/nutrition")
     assert r.status_code == 200
     html = r.get_data(as_text=True)
-    for item in ("Food quality score", "Calories", "Water", "Logged today",
-                 "Targets coverage", "hydration vs target"):
-        assert item in html, f"{item!r} missing from /nutrition"
-    # the header range dd exists with all five whitelisted options
+    for tab in ("Goals", "Meals", "Supplements"):
+        assert f">{tab}<" in html, f"tab {tab!r} missing from /nutrition"
+    assert ">Intake<" not in html and ">Recipes<" not in html
+    # the range dd survives for the Supplements adherence card
     assert 'data-dd="nutrition"' in html
     for opt in ("Day", "Week", "Month", "Year", "All time"):
         assert f">{opt}<" in html, f"range option {opt!r} missing"
-    # task-41: the KPI tile row is present (all four honest tiles)
-    for tile in ("Protein", "Log coverage"):
-        assert f">{tile}<" in html, f"KPI tile {tile!r} missing"
-    # T47: the Recipes filter pills exist (reusing the .pills/.pill classes)
-    # and the owner-removed Log-by-grams card is gone (the /api/nutrition/
-    # log-food route + subcommand stay agent-reachable; only the UI went).
+    # consumption logging is gone from the page (routes/CLI stay agent-reachable)
+    for gone in ("Logged today", "Log coverage", "Food quality score", "log a batch",
+                 "Log by grams", "nBatchForm", "nEntries", "nKpiKcal", "nGaps",
+                 "portions in freezer"):
+        assert gone not in html, f"{gone!r} should be removed from /nutrition"
+    # meals keep the meal-type dd and an ordering pill row
     assert 'id="nPills"' in html
-    for pill in ("All", "Closes today's gaps", "High protein"):
+    for pill in ("All", "High protein"):
         assert f">{pill}<" in html, f"filter pill {pill!r} missing"
-    assert "Log by grams" not in html
+    assert "Closes today" not in html
 
 
-def test_nutrition_target_card_is_honest_scaffold(authed):
+def test_nutrition_goals_card_lists_every_target(authed):
     r = authed.get("/nutrition")
     assert r.status_code == 200
     html = r.get_data(as_text=True)
-    # every nutrient row from the design is scaffolded, in the design's order
     for label in ("Calories", "Protein", "Carbs", "Fat", "Fibre", "Water",
                   "Vit D", "Magnesium", "Iron", "Zinc", "Omega-3"):
-        assert f">{label}<" in html, f"target-card row {label!r} missing"
-    # legend chips from the current design contract
-    for chip in ("too little", "good", "too much", "100% target", "maintenance band"):
-        assert chip in html, f"legend chip {chip!r} missing"
-    # PHASE is a read-only INDICATOR, not a control — every button stays
-    # natively disabled + aria-disabled (assistive tech + the "not a dead
-    # control" grep) permanently.
+        assert f">{label}<" in html, f"goal row {label!r} missing"
+    # PHASE is a read-only INDICATOR, not a control
     assert html.count('aria-disabled="true"') >= 3
     for phase in ("Cut", "Maintain", "Bulk"):
         assert f">{phase}<" in html
