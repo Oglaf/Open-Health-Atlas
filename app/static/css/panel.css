@@ -1520,18 +1520,26 @@ table.ltab tr:last-child td { border-bottom: 0; }
 .ng-c { background: var(--good); }
 .ng-f { background: var(--warn); }
 .ng-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.ng-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.ng-tile {
+  display: flex; flex-direction: column; gap: 6px; padding: 12px 14px;
+  border: 1px solid var(--hair); border-radius: 12px; background: var(--chip);
+}
+.ng-tile-val { font: 700 22px var(--disp); }
+.ng-tile-val span { font: 600 12px var(--ui); color: var(--muted); }
 .ng-stack { display: flex; height: 10px; border-radius: 6px; overflow: hidden; background: var(--track); }
 .ng-stack > span { height: 100%; }
 .ng-fill { background: var(--accent); }
-.ng-form { display: grid; gap: 12px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--hair); }
-.ng-form-card { display: grid; gap: 4px; }
+/* minmax(0, 1fr): a grid column sized to its content would let the auto-fit
+   field grids below widen the whole page on a phone. */
+.ng-form { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--hair); }
+.ng-form-card { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; min-width: 0; }
+#nMicroForm { margin-top: 4px; padding-top: 0; border-top: 0; }
 .ng-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
 .ng-form-grid .ng-wide { grid-column: 1 / -1; }
 .ng-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .ng-status { min-height: 1.2em; margin: 0; font-size: 12px; color: var(--muted); }
 .ng-status.err { color: var(--bad); }
-.ng-micro-row { display: grid; grid-template-columns: minmax(90px, 1fr) 120px 48px auto; gap: 8px; align-items: center; }
-.ng-micro-row .strong { font-size: 13px; }
 .ng-meal-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 .ng-meal-actions { display: flex; gap: 6px; align-items: center; }
 .ng-meal-actions .ng-btn { padding: 4px 10px; }
@@ -1548,8 +1556,4 @@ table.ltab tr:last-child td { border-bottom: 0; }
 .ng-btn.primary { background: var(--sidebar-active); color: var(--sidebar-active-ink); border-color: transparent; padding: 8px 16px; font-size: 13px; }
 .ng-btn.primary:hover { filter: brightness(1.12); }
 .ng-btn:disabled { opacity: .5; cursor: default; }
-.ng-form[hidden], .ng-form-card[hidden], .ng-btn[hidden], .ng-actions[hidden] { display: none; }
-@media (max-width: 560px) {
-  .ng-micro-row { grid-template-columns: 1fr 100px auto; }
-  .ng-micro-row .micro { display: none; }
-}
+.ng-form[hidden], .ng-form-card[hidden], .ng-btn[hidden], .ng-actions[hidden], .ng-tiles[hidden] { display: none; }

@@ -112,14 +112,10 @@
         <h3 class="card-title">Micronutrients</h3>
         <button class="ng-btn" id="nMicroEditBtn" type="button" hidden>Edit targets</button>
       </div>
-      <div class="ng-chips" id="nMicroChips"><span class="muted micro">Loading…</span></div>
+      <div class="ng-tiles" id="nMicroChips"><span class="muted micro">Loading…</span></div>
       <form class="ng-form" id="nMicroForm" hidden novalidate>
-        <div class="vstack" id="nMicroRows"></div>
-        <div class="add-ex">
-          <select class="select" id="nMicroAdd" aria-label="Nutrient to add"></select>
-          <input id="nMicroAddVal" type="number" min="0" step="any" placeholder="target" aria-label="Target amount" inputmode="decimal">
-          <button class="ng-btn" id="nMicroAddBtn" type="button">Add</button>
-        </div>
+        <p class="muted micro m0">Daily targets for all ten nutrients. Every one is needed to calculate your goals.</p>
+        <div class="ng-form-grid" id="nMicroFields"></div>
         <div class="ng-actions">
           <button class="ng-btn primary" id="nMicroSave" type="submit">Save</button>
           <button class="ng-btn" id="nMicroCancel" type="button">Cancel</button>

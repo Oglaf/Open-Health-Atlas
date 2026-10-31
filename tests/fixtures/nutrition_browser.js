@@ -105,7 +105,7 @@ async function readyTargets() {
   assert.ok(h.node('nPhaseCaption').textContent.includes('2026-01-01'));
   assert.equal(h.node('nGoalEditBtn').hidden,false);
   assert.equal(h.node('nMicroEditBtn').hidden,false);
-  assert.equal(h.node('nMicroChips').children[0].textContent,'Iron · 8 mg');
+  assert.equal(h.node('nMicroChips').children[0].textContent,'Iron8 mg');
   assert.equal(h.node('nMicroChips').children.length,1);  // a micro without a target is not shown
   assert.ok(h.node('nPhaseHelp').textContent.includes('maintenance'));
   assert.ok(h.node('nRing')['aria-label'].includes('protein'));
@@ -158,12 +158,32 @@ async function microTargetsAreEditable() {
 
   await h.node('nMicroEditBtn').listeners.click();
   assert.equal(h.node('nMicroForm').hidden,false);
-  assert.equal(h.node('nMicroRows').children.length,1);
-  h.node('nMicroRows').children[0].querySelector=()=>({value:'10'});
+  assert.equal(h.node('nMicroChips').hidden,true);   // the tiles give way to the editor
+  const fields=h.node('nMicroFields').children;
+  // exactly the ten nutrients the engine needs: nothing to add, nothing to remove
+  assert.equal(fields.length,10);
+  const input=label=>label.children[1];
+  assert.deepEqual(fields.map(label=>input(label).dataset.micro).sort(),
+    ['calcium','folate','iron','magnesium','omega3_epa_dha','potassium','vitamin_b12','vitamin_c','vitamin_d','zinc']);
+  assert.equal(input(fields.find(label=>input(label).dataset.micro==='iron')).value,8);  // prefilled from the engine
+  assert.equal(input(fields.find(label=>input(label).dataset.micro==='zinc')).value,''); // not configured yet
+
+  // a blank field is refused, naming the missing nutrient, and nothing is written
+  await h.node('nMicroForm').listeners.submit({preventDefault(){}});
+  assert.ok(h.node('nMicroStatus').textContent.includes('Zinc is missing')||h.node('nMicroStatus').textContent.includes('is missing'));
+  assert.deepEqual(h.writes,[]);
+
+  fields.forEach(label=>{ input(label).value=input(label).dataset.micro==='iron'?'10':'5'; });
   await h.node('nMicroForm').listeners.submit({preventDefault(){}});
   await tick();
 
-  assert.deepEqual(h.writes,[{url:'/api/profile/nutrition-config',body:{nutrient_targets:{iron:10}}}]);
+  assert.equal(h.writes.length,1);
+  assert.equal(h.writes[0].url,'/api/profile/nutrition-config');
+  const saved=h.writes[0].body.nutrient_targets;
+  assert.equal(Object.keys(saved).length,10);
+  assert.equal(saved.iron,10);
+  assert.equal(saved.zinc,5);
+  assert.equal(h.node('nMicroChips').hidden,false);
 }
 const STEW={recipe_id:'fictional-stew',name:'Fictional stew',grams_per_portion:400,meal_type:'dinner'};
 const STEW_DETAIL={recipe:{recipe_id:'fictional-stew',name:'Fictional stew',batch_grams:2000,grams_per_portion:400,portions:5},

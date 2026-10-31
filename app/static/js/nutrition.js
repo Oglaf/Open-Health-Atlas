@@ -71,8 +71,20 @@
     bulk: "Eat above maintenance to support muscle gain.",
   };
   const MICRO_LABEL = { vitamin_d: "Vitamin D", vitamin_b12: "Vitamin B12", vitamin_c: "Vitamin C",
-    omega3_epa_dha: "Omega-3 (EPA+DHA)" };
+    omega3_epa_dha: "Omega-3 EPA+DHA" };
   const microLabel = (key) => MICRO_LABEL[key] || titleCase(key.replace(/_/g, " "));
+  // The ten nutrients the targets engine requires (all of them, or it computes
+  // no targets at all), in display order: vitamins, minerals, then omega-3.
+  const MICRO_ORDER = ["vitamin_d", "vitamin_b12", "vitamin_c", "folate", "magnesium", "calcium",
+    "potassium", "iron", "zinc", "omega3_epa_dha"];
+  const MICRO_MICROGRAM = new Set(["vitamin_d", "vitamin_b12", "folate"]);
+  const microUnit = (key, engineUnit) =>
+    engineUnit ? (engineUnit === "ug" ? "µg" : engineUnit) : (MICRO_MICROGRAM.has(key) ? "µg" : "mg");
+  const microRank = (key) => { const i = MICRO_ORDER.indexOf(key); return i < 0 ? MICRO_ORDER.length : i; };
+  function microNames() {
+    const known = (profileInfo && profileInfo.catalog && profileInfo.catalog.micro_target_names) || [];
+    return [...MICRO_ORDER, ...known.filter((n) => !MICRO_ORDER.includes(n))];
+  }
 
   // The targets engine, shared by the goals card and the meal cards. A bridge
   // error resolves to a synthetic {status:"error"} so every consumer's
@@ -121,21 +133,34 @@
     ring.setAttribute("aria-label", "Macro split of the daily calorie goal: " + ring.dataset.split);
   }
 
+  function microTile(m) {
+    const tile = document.createElement("div");
+    tile.className = "ng-tile";
+    const name = document.createElement("span");
+    name.className = "label";
+    name.textContent = microLabel(m.nutrient);
+    const value = document.createElement("span");
+    value.className = "ng-tile-val";
+    const amount = document.createElement("b");
+    amount.textContent = m.target;
+    const unit = document.createElement("span");
+    unit.textContent = " " + microUnit(m.nutrient, m.unit);
+    value.append(amount, unit);
+    tile.append(name, value);
+    return tile;
+  }
+
   function renderMicros(t) {
     const box = $("nMicroChips");
-    const micros = t.status === "ok" ? (t.targets.micros || []).filter((m) => m.target != null) : [];
+    const micros = (t.status === "ok" ? (t.targets.micros || []) : []).filter((m) => m.target != null)
+      .sort((a, b) => microRank(a.nutrient) - microRank(b.nutrient));
     if (!micros.length) {
       box.replaceChildren(Object.assign(document.createElement("span"), {
         className: "muted micro",
         textContent: t.status === "ok" ? "No micronutrient targets configured." : "Available once targets are calculated.",
       }));
     } else {
-      box.replaceChildren(...micros.map((m) => {
-        const chip = document.createElement("span");
-        chip.className = "chip";
-        chip.textContent = `${microLabel(m.nutrient)} · ${m.target} ${m.unit || ""}`.trim();
-        return chip;
-      }));
+      box.replaceChildren(...micros.map(microTile));
     }
     const canEdit = !!(profileInfo && profileInfo.per_user_overlay_supported);
     $("nMicroEditBtn").hidden = !canEdit;
@@ -248,69 +273,48 @@
     } finally { buttons.forEach((b) => (b.disabled = false)); }
   });
 
-  // Micronutrient targets (non-owner accounts)
-  function microRow(name, target, unit) {
-    const row = document.createElement("div");
-    row.className = "ng-micro-row";
-    row.dataset.name = name;
-    const label = document.createElement("span");
-    label.className = "strong";
-    label.textContent = microLabel(name);
+  // Micronutrient targets (non-owner accounts). The engine needs all ten, so the
+  // editor is one field per required nutrient: nothing to add or remove.
+  function microField(name, target, unit) {
+    const label = document.createElement("label");
+    label.className = "field";
+    const text = document.createElement("span");
+    text.textContent = `${microLabel(name)} (${unit})`;
     const input = document.createElement("input");
-    input.type = "number"; input.min = "0"; input.step = "any"; input.value = target;
-    input.setAttribute("aria-label", microLabel(name) + " target");
-    const u = document.createElement("span");
-    u.className = "muted micro";
-    u.textContent = unit || "";
-    const rm = document.createElement("button");
-    rm.type = "button"; rm.className = "ng-btn danger"; rm.textContent = "Remove";
-    rm.addEventListener("click", () => { row.remove(); refreshMicroAdd(); });
-    row.append(label, input, u, rm);
-    return row;
-  }
-  function refreshMicroAdd() {
-    const used = new Set([...$("nMicroRows").children].map((r) => r.dataset.name));
-    const names = ((profileInfo && profileInfo.catalog && profileInfo.catalog.micro_target_names) || [])
-      .filter((n) => !used.has(n));
-    $("nMicroAdd").replaceChildren(...names.map((n) => {
-      const o = document.createElement("option"); o.value = n; o.textContent = microLabel(n); return o;
-    }));
-    $("nMicroAddBtn").disabled = !names.length;
+    input.type = "number"; input.min = "0"; input.step = "any";
+    input.dataset.micro = name;
+    input.value = target == null ? "" : target;
+    label.append(text, input);
+    return label;
   }
   $("nMicroEditBtn").addEventListener("click", async () => {
     const t = await loadTargets();
-    const micros = t.status === "ok" ? (t.targets.micros || []).filter((m) => m.target != null) : [];
-    $("nMicroRows").replaceChildren(...micros.map((m) => microRow(m.nutrient, m.target, m.unit)));
-    refreshMicroAdd();
+    const current = {};
+    (t.status === "ok" ? (t.targets.micros || []) : []).forEach((m) => { if (m.target != null) current[m.nutrient] = m; });
+    $("nMicroFields").replaceChildren(...microNames().map((n) =>
+      microField(n, current[n] && current[n].target, microUnit(n, current[n] && current[n].unit))));
     status("nMicroStatus", "");
     $("nMicroForm").hidden = false;
+    $("nMicroChips").hidden = true;
     $("nMicroEditBtn").hidden = true;
   });
   function closeMicroForm() {
     $("nMicroForm").hidden = true;
+    $("nMicroChips").hidden = false;
     $("nMicroEditBtn").hidden = !(profileInfo && profileInfo.per_user_overlay_supported);
   }
   $("nMicroCancel").addEventListener("click", closeMicroForm);
-  $("nMicroAddBtn").addEventListener("click", () => {
-    const name = $("nMicroAdd").value;
-    const n = parseFloat($("nMicroAddVal").value);
-    if (!name) return;
-    if (!Number.isFinite(n) || n <= 0) { status("nMicroStatus", "Enter a target above zero.", true); return; }
-    $("nMicroRows").appendChild(microRow(name, n, ""));
-    $("nMicroAddVal").value = "";
-    status("nMicroStatus", "");
-    refreshMicroAdd();
-  });
   $("nMicroForm").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const targets = {};
-    for (const row of $("nMicroRows").children) {
-      const n = parseFloat(row.querySelector("input").value);
+    for (const label of $("nMicroFields").children) {
+      const input = label.children[1];
+      const n = parseFloat(input.value);
       if (!Number.isFinite(n) || n <= 0) {
-        status("nMicroStatus", `${microLabel(row.dataset.name)} must be above zero.`, true);
+        status("nMicroStatus", `Every nutrient needs a target above zero — ${microLabel(input.dataset.micro)} is missing.`, true);
         return;
       }
-      targets[row.dataset.name] = n;
+      targets[input.dataset.micro] = n;
     }
     const btn = $("nMicroSave");
     btn.disabled = true;
