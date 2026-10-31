@@ -366,6 +366,7 @@ def test_import_is_not_bridge_allowlisted():
     may ever run it."""
     import types
     broker = types.ModuleType("broker")
+    broker.__file__ = str(ROOT.parent / "deploy" / "hermes-bridge")
     src = (ROOT.parent / "deploy" / "hermes-bridge").read_text()
     exec(compile(src, "hermes-bridge", "exec"), broker.__dict__)
     assert "import-submuscle-map" not in broker.ALLOWED

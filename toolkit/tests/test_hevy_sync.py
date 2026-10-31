@@ -336,6 +336,7 @@ def test_sync_commands_are_not_bridge_allowlisted(monkeypatch):
     import types
     monkeypatch.syspath_prepend(str(ROOT.parent / "deploy"))
     broker = types.ModuleType("broker")
+    broker.__file__ = str(ROOT.parent / "deploy" / "hermes-bridge")
     src = (ROOT.parent / "deploy" / "hermes-bridge").read_text()
     exec(compile(src, "hermes-bridge", "exec"), broker.__dict__)
     for cmd in ("import-hevy-json", "import-hevy-templates", "import-hevy-routines",

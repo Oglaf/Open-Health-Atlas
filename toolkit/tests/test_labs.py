@@ -228,6 +228,7 @@ def test_ingest_is_not_bridge_allowlisted(monkeypatch):
     monkeypatch.syspath_prepend(str(ROOT.parent / "deploy"))
     import types
     broker = types.ModuleType("broker")
+    broker.__file__ = str(ROOT.parent / "deploy" / "hermes-bridge")
     src = (ROOT.parent / "deploy" / "hermes-bridge").read_text()
     exec(compile(src, "hermes-bridge", "exec"), broker.__dict__)
     for cmd in ("lab-ingest", "lab-capture"):
