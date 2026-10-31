@@ -162,11 +162,7 @@ jobs:
 
       - name: Test retained application behavior
         if: steps.scope.outputs.application == 'true'
-        run: python -m pytest -q -p no:cacheprovider --durations=10 --basetemp "$OHA_TEST_ROOT/application" --ignore=tests/e2e --ignore=tests/test_local_mcp.py
-
-      - name: Test fictional end-to-end journeys
-        if: steps.scope.outputs.application == 'true'
-        run: python -m pytest -q -p no:cacheprovider --durations=10 --basetemp "$OHA_TEST_ROOT/journeys" tests/e2e
+        run: python -m pytest -q -p no:cacheprovider --durations=10 --basetemp "$OHA_TEST_ROOT/application" --ignore=tests/test_local_mcp.py
 
       - name: Test actual optional MCP client and server
         if: steps.scope.outputs.application == 'true'

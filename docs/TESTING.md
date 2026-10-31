@@ -53,11 +53,7 @@ oha_test_root="$(mktemp -d /tmp/oha-tests.XXXXXX)"
 # Application, toolkit and integration contracts, including local sockets.
 "$oha_test_env/bin/python" -m pytest -q -p no:cacheprovider --durations=10 \
   --basetemp "$oha_test_root/application" \
-  --ignore=tests/e2e --ignore=tests/test_local_mcp.py
-
-# Fictional end-to-end journeys.
-"$oha_test_env/bin/python" -m pytest -q -p no:cacheprovider --durations=10 \
-  --basetemp "$oha_test_root/journeys" tests/e2e
+  --ignore=tests/test_local_mcp.py
 
 # Actual optional MCP SDK client and stdio server.
 "$oha_test_env/bin/python" -m pytest -q -p no:cacheprovider --durations=10 \
