@@ -89,12 +89,9 @@ older references.
 - **Intended behavior:** relate quarterly strength/laterality asymmetry to later
   pain episodes using an event-centered, temporally bounded algorithm.
 - **Status:** **not implemented**.
-- **Executable evidence:**
-  `toolkit/tests/fixtures/autonomous_insights/06-quarterly-asymmetry.json` and
-  the `quarterly_asymmetry` branch of
-  `tests/e2e/test_autonomous_insight_traces.py::test_each_trace_replays_exactly`
-  require `logic_not_implemented` and reject a pain hypothesis while retaining
-  the underlying strength/control/mobility measurements.
+- **Executable evidence:** none. The autonomous-insight trace replay that
+  asserted `logic_not_implemented` for this analysis was removed with the
+  panel chat and Insight Explorer.
 - **Missing component:** episode construction, exposure window, lag policy,
   confounder/coverage checks, and accepted interpretation boundary.
 - **End-user impact:** current muscle/laterality displays work, but Hermes does
