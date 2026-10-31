@@ -443,3 +443,14 @@ def test_self_service_profile_merge_refuses_owner_and_unknown_user_with_users_ro
     assert "bootstrap owner" in b._validate("user-profile-merge", [], "owner")
     assert "unknown or invalid user" in b._validate("user-profile-merge", [], "ghost")
     assert b._validate("user-profile-merge", [], "alice") is None
+
+
+def test_meal_commands_take_stdin_or_one_id_and_no_flags():
+    b = _load()
+    # meal-save carries its JSON on stdin; meal-delete takes one exact recipe id
+    assert b._validate("meal-save", []) is None
+    assert b._validate("meal-save", ["--evil", "x"]) is not None
+    assert b._validate("meal-delete", ["sample-stew"]) is None
+    assert b._validate("meal-delete", ["sample-stew", "--force"]) is not None
+    # the bulk recipe import is still not reachable
+    assert b._validate("import-recipes", ["recipes.csv"]) is not None

@@ -38,6 +38,8 @@ ACTIVITY_WRITES = (
     # Fork 2026-10-29 (docs/PRODUCT_AUTHORITY.md "manual daily capture"):
     # the Daily log page's water/supplement/pain writers.
     "water-add", "supplement-log", "pain-log",
+    # Fork 2026-10-31: hand-entered meals on the Nutrition > Meals tab.
+    "meal-save", "meal-delete",
 )
 
 # Daily log back-dating window: a few days of catch-up, never a historical

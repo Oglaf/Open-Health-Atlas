@@ -180,6 +180,9 @@ def build_parser(handlers, *, json_errors, output, meal_types, restock_actions, 
     s.add_argument("--portions", type=int, default=None)
     s.add_argument("--meal-type", dest="meal_type", choices=meal_types, default=None)
     s = add("recipe-ingredients-set"); s.add_argument("recipe")
+    # Hand-entered meals (panel Meals tab): meal-save takes its JSON on stdin.
+    s = add("meal-save")
+    s = add("meal-delete"); s.add_argument("recipe")
     s = add("import-cronometer"); s.add_argument("csv")
     s = add("import-google-health"); s.add_argument("json_file", nargs="?", default="-")
     s = add("nutrition-target-set"); s.add_argument("name")
@@ -501,6 +504,12 @@ def run(context, *, argv, output, parse_number,
 
     def recipe_ingredients_set(arguments):
         output(food.recipe_ingredients_set(context, arguments, stdin=stdin))
+
+    def meal_save(arguments):
+        output(food.meal_save(context, arguments, stdin=stdin))
+
+    def meal_delete(arguments):
+        output(food.meal_delete(context, arguments))
 
     def prep(arguments):
         output(food.prep(context, arguments))
@@ -871,6 +880,8 @@ def run(context, *, argv, output, parse_number,
         "set-batch": set_batch,
         "recipe-tag": recipe_tag,
         "recipe-ingredients-set": recipe_ingredients_set,
+        "meal-save": meal_save,
+        "meal-delete": meal_delete,
         "prep": prep,
         "eat": eat,
         "log-food": log_food,

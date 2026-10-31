@@ -170,19 +170,39 @@ def test_nutrition_page_renders(authed):
     assert "Closes today" not in html
 
 
-def test_nutrition_goals_card_lists_every_target(authed):
-    r = authed.get("/nutrition")
-    assert r.status_code == 200
-    html = r.get_data(as_text=True)
-    for label in ("Calories", "Protein", "Carbs", "Fat", "Fibre", "Water",
-                  "Vit D", "Magnesium", "Iron", "Zinc", "Omega-3"):
-        assert f">{label}<" in html, f"goal row {label!r} missing"
-    # PHASE is a read-only INDICATOR, not a control
-    assert html.count('aria-disabled="true"') >= 3
+def test_nutrition_goals_tab_is_editable(authed):
+    html = authed.get("/nutrition").get_data(as_text=True)
+    for label in ("Calories", "Protein", "Carbs", "Fat", "Water", "Micronutrients",
+                  "Diet phase", "Edit goals", "Edit targets"):
+        assert label in html, f"goals element {label!r} missing"
+    # the phase indicator is a live control now
     for phase in ("Cut", "Maintain", "Bulk"):
         assert f">{phase}<" in html
+    assert 'id="nPhaseSeg"' in html and "aria-disabled" not in html
+    # inline edit forms
+    for form_id in ("nGoalForm", "nMicroForm", "nRing"):
+        assert f'id="{form_id}"' in html
     assert 'id="nTgtReason"' in html
     assert 'id="nutrition-target-setup"' in html
+
+
+def test_nutrition_meals_tab_can_create_edit_and_delete(authed):
+    html = authed.get("/nutrition").get_data(as_text=True)
+    assert "+ New meal" in html and 'id="nMealForm"' in html
+    for field in ("mf-name", "mf-type", "mf-gpp", "mf-portions", "mf-ingredients",
+                  "mf-save", "mf-cancel"):
+        assert f'id="{field}"' in html, f"meal form field {field!r} missing"
+    for nutrient in ("kcal", "protein_g", "carbs_g", "fat_g", "fiber_g", "vitamin_d_ug",
+                     "magnesium_mg", "iron_mg", "zinc_mg"):
+        assert f'data-nut="{nutrient}"' in html, f"meal nutrient {nutrient!r} missing"
+
+
+def test_nutrition_page_uses_no_inline_styles(authed):
+    # the CSP is style-src 'self': inline style attributes are silently dropped
+    html = authed.get("/nutrition").get_data(as_text=True)
+    assert 'style="' not in html
+    js = authed.get("/static/js/nutrition.js").get_data(as_text=True)
+    assert 'style="' not in js
 
 
 def test_security_headers_on_public_page(client):

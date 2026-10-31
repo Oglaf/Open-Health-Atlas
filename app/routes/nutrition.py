@@ -22,6 +22,9 @@ bp = Blueprint("nutrition", __name__, url_prefix="/api/nutrition")
 # user int. "all" drops the lower bound.
 INTAKE_ALLOWED_DAYS = {"1", "7", "30", "365", "all"}
 MEAL_TYPES = {"breakfast", "lunch", "dinner", "snack"}
+MEAL_SAVE_FIELDS = {"recipe_id", "name", "meal_type", "grams_per_portion", "portions",
+                    "per_portion", "ingredients"}
+RECIPE_ID = re.compile(r"[a-z0-9][a-z0-9._-]{0,159}")
 
 
 def _food_optional_args(body):
@@ -50,9 +53,9 @@ def _food_optional_args(body):
     return args, None
 
 
-def _run(*args):
+def _run(*args, stdin=None):
     try:
-        return jsonify(ok=True, result=bridge.run(*args))
+        return jsonify(ok=True, result=bridge.run(*args, stdin=stdin))
     except bridge.BridgeError as exc:
         return jsonify(ok=False, error=str(exc)), 400
 
@@ -621,3 +624,29 @@ def prep():
             return jsonify(ok=False, error="batch_grams must be 1–20000"), 400
         args += ["--batch-grams", str(bgf)]
     return _run("prep", *args)
+
+
+@bp.post("/meal")
+def meal_save():
+    """Create (no recipe_id) or update (recipe_id) a hand-entered meal. The
+    per-portion nutrients, validation and persistence belong to health.py's
+    `meal-save`; the checks here only give fast feedback before the broker."""
+    b = request.get_json(silent=True)
+    if not isinstance(b, dict):
+        return jsonify(ok=False, error="a meal object is required"), 400
+    if set(b) - MEAL_SAVE_FIELDS:
+        return jsonify(ok=False, error="unknown meal field"), 400
+    rid = b.get("recipe_id")
+    if rid is not None and (not isinstance(rid, str) or not RECIPE_ID.fullmatch(rid)):
+        return jsonify(ok=False, error="recipe_id is not valid"), 400
+    if not isinstance(b.get("name"), str) or not b["name"].strip():
+        return jsonify(ok=False, error="a meal name is required"), 400
+    return _run("meal-save", stdin=json.dumps(b))
+
+
+@bp.post("/meal/<rid>/delete")
+def meal_delete(rid):
+    """Delete one meal and its freezer portions (past logged intake stays)."""
+    if not RECIPE_ID.fullmatch(rid):
+        return jsonify(ok=False, error="recipe_id is not valid"), 400
+    return _run("meal-delete", rid)

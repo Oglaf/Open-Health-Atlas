@@ -1,19 +1,17 @@
 {% extends "base.html" %}
 {% block title %}Nutrition{% endblock %}
 {% block content %}
-{# Nutrition pillar: goals and meals. The page does not log consumption —
-   there is no eat/prep stepper, batch form, today's-intake tile, trend or
-   "logged today" feed. Their API routes and CLI subcommands (/eat, /prep,
-   /log-food, /today, /calories, /water, /coverage, /recipe-gaps) stay for
-   agents and the dashboard; only the page UI went.
-   - Goals tab: the targets engine's daily targets (kcal, macros, water and
-     the configured micros) plus the read-only cut/maintain/bulk phase
-     indicator. Unavailable targets show one shared setup disclosure, never a
-     fabricated number.
-   - Meals tab: every recipe with its per-portion nutrients and each macro as
-     a % of the daily target (client-side from /recipe/<rid> + /targets).
-   - Supplements tab: unchanged (product list, adherence trend, notes). The
-     header range dd windows only its Adherence card. #}
+{# Nutrition pillar: goals and meals. No consumption logging (no eat/prep
+   stepper, batch form, intake tiles or "logged today" feed); /eat, /prep,
+   /log-food and the read routes stay for agents and the dashboard.
+   - Goals tab: calorie ring split by macro, live phase switch, inline edit of
+     the calorie/protein overrides and of the micronutrient targets, all through
+     the existing /api/profile routes (micro targets: non-owner accounts only).
+   - Meals tab: create, edit and delete hand-entered meals (per-portion
+     nutrients) through /api/nutrition/meal; imported recipes are editable too.
+     Cards show a macro split bar and each macro as a % of the daily goal.
+   - Supplements tab: unchanged. The header range dd windows only its
+     Adherence card. #}
 <div class="vstack">
   <div class="row-top between wrap">
     <div class="crumb">
@@ -59,76 +57,88 @@
   </section>
 
   <div class="subview on" data-pane="goals" data-group="nutri">
-    <div class="card" id="nTargetCard">
-      <div class="row between wrap mb-1">
-        <h3 class="card-title">Daily nutrition goals</h3>
-        <div class="row gap-2">
-          <span class="muted micro">PHASE</span>
-          <div class="seg" role="group" aria-label="Diet phase — read-only">
-            <button type="button" id="nPhaseCut" disabled aria-disabled="true" aria-pressed="false"
-              title="Current phase indicator">Cut</button>
-            <button type="button" id="nPhaseMaintain" disabled aria-disabled="true" aria-pressed="false"
-              title="Current phase indicator">Maintain</button>
-            <button type="button" id="nPhaseBulk" disabled aria-disabled="true" aria-pressed="false"
-              title="Current phase indicator">Bulk</button>
+    <div class="grid-2">
+      <div class="card" id="nTargetCard">
+        <div class="row between wrap mb-1">
+          <h3 class="card-title">Calories &amp; macros</h3>
+          <button class="ng-btn" id="nGoalEditBtn" type="button" hidden>Edit goals</button>
+        </div>
+        <div class="ng-hero">
+          <div class="ng-ring ng-empty" id="nRing" role="img" aria-label="Macro split of the daily calorie goal">
+            <div class="ng-ring-center">
+              <span class="ng-big" id="nTgtCal">—</span>
+              <span class="muted micro">kcal / day</span>
+            </div>
+          </div>
+          <div class="ng-legend">
+            <div class="ng-leg-row"><span class="ng-dot ng-p"></span><span class="goal-label">Protein</span><span class="goal-val" id="nTgtProtein">—</span></div>
+            <div class="ng-leg-row"><span class="ng-dot ng-c"></span><span class="goal-label">Carbs</span><span class="goal-val" id="nTgtCarbs">—</span></div>
+            <div class="ng-leg-row"><span class="ng-dot ng-f"></span><span class="goal-label">Fat</span><span class="goal-val" id="nTgtFat">—</span></div>
           </div>
         </div>
+        <p class="muted micro m0 mt-2" id="nTgtBand">Maintenance band appears once targets are calculated.</p>
+        <form class="ng-form" id="nGoalForm" hidden novalidate>
+          <div class="ng-form-grid">
+            <label class="field"><span>Calories (kcal / day)</span>
+              <input id="nGoalKcal" type="number" min="500" max="10000" step="10" inputmode="numeric" aria-describedby="nGoalStatus"></label>
+            <label class="field"><span>Protein (g / day)</span>
+              <input id="nGoalProtein" type="number" min="10" max="500" step="1" inputmode="numeric" aria-describedby="nGoalStatus"></label>
+          </div>
+          <p class="muted micro m0">Carbs and fat are derived from your calories, protein and phase.</p>
+          <div class="ng-actions">
+            <button class="ng-btn primary" id="nGoalSave" type="submit">Save</button>
+            <button class="ng-btn" id="nGoalCancel" type="button">Cancel</button>
+            <span class="ng-status" id="nGoalStatus" role="alert"></span>
+          </div>
+        </form>
       </div>
-      <p class="muted micro m0 mb-2" id="nPhaseCaption">Loading phase…</p>
-      <div class="goals-list">
-        <div class="goal-row">
-          <span class="goal-label">Calories</span>
-          <span class="goal-val" id="nTgtCal">—</span>
+
+      <div class="card">
+        <h3 class="card-title mb-1">Diet phase</h3>
+        <div class="seg" id="nPhaseSeg" role="group" aria-label="Diet phase">
+          <button type="button" id="nPhaseCut" data-phase="cut" aria-pressed="false">Cut</button>
+          <button type="button" id="nPhaseMaintain" data-phase="maintain" aria-pressed="false">Maintain</button>
+          <button type="button" id="nPhaseBulk" data-phase="bulk" aria-pressed="false">Bulk</button>
         </div>
-        <div class="goal-row">
-          <span class="goal-label">Protein</span>
-          <span class="goal-val" id="nTgtProtein">—</span>
-        </div>
-        <div class="goal-row">
-          <span class="goal-label">Carbs</span>
-          <span class="goal-val" id="nTgtCarbs">—</span>
-        </div>
-        <div class="goal-row">
-          <span class="goal-label">Fat</span>
-          <span class="goal-val" id="nTgtFat">—</span>
-        </div>
-        <div class="goal-row">
-          <span class="goal-label">Fibre</span>
-          <span class="goal-val" id="nTgtFibre">—</span>
-        </div>
-        <div class="goal-row">
-          <span class="goal-label">Water</span>
-          <span class="goal-val" id="nTgtWater">—</span>
-        </div>
-        <div class="goal-row">
-          <span class="goal-label">Vit D</span>
-          <span class="goal-val" id="nTgtVitD">—</span>
-        </div>
-        <div class="goal-row">
-          <span class="goal-label">Magnesium</span>
-          <span class="goal-val" id="nTgtMg">—</span>
-        </div>
-        <div class="goal-row">
-          <span class="goal-label">Iron</span>
-          <span class="goal-val" id="nTgtFe">—</span>
-        </div>
-        <div class="goal-row">
-          <span class="goal-label">Zinc</span>
-          <span class="goal-val" id="nTgtZn">—</span>
-        </div>
-        <div class="goal-row">
-          <span class="goal-label">Omega-3</span>
-          <span class="goal-val" id="nTgtOmega">—</span>
-        </div>
+        <p class="muted micro m0 mt-2" id="nPhaseCaption">Loading phase…</p>
+        <p class="muted note-txt m0 mt-2" id="nPhaseHelp"></p>
+        <p class="ng-status" id="nPhaseStatus" role="alert"></p>
+        <div class="kv mt-3"><span class="n" id="nTgtWater">—</span><span class="kv-u">water / day</span></div>
       </div>
-      <p class="muted micro m0 mt-2">Targets come from your profile, weight and phase. Calories
-        also show their maintenance band. Fibre has no personal target configured yet.</p>
+    </div>
+
+    <div class="card" id="nMicroCard">
+      <div class="row between wrap mb-1">
+        <h3 class="card-title">Micronutrients</h3>
+        <button class="ng-btn" id="nMicroEditBtn" type="button" hidden>Edit targets</button>
+      </div>
+      <div class="ng-chips" id="nMicroChips"><span class="muted micro">Loading…</span></div>
+      <form class="ng-form" id="nMicroForm" hidden novalidate>
+        <div class="vstack" id="nMicroRows"></div>
+        <div class="add-ex">
+          <select class="select" id="nMicroAdd" aria-label="Nutrient to add"></select>
+          <input id="nMicroAddVal" type="number" min="0" step="any" placeholder="target" aria-label="Target amount" inputmode="decimal">
+          <button class="ng-btn" id="nMicroAddBtn" type="button">Add</button>
+        </div>
+        <div class="ng-actions">
+          <button class="ng-btn primary" id="nMicroSave" type="submit">Save</button>
+          <button class="ng-btn" id="nMicroCancel" type="button">Cancel</button>
+          <span class="ng-status" id="nMicroStatus" role="alert"></span>
+        </div>
+      </form>
+      <p class="muted micro m0 mt-2" id="nMicroNote"></p>
     </div>
   </div>
 
   <div class="subview" data-pane="meals" data-group="nutri">
     <div class="row-top between wrap">
-      <p class="muted note-txt m0">Your meals · nutrients per portion and share of your daily goals</p>
+      <div class="row gap-2 wrap">
+        <button class="ng-btn primary" id="nMealNew" type="button">+ New meal</button>
+        <div class="pills" id="nPills" role="group" aria-label="Meal list ordering">
+          <button class="pill active" data-pill="all" type="button" aria-pressed="true">All</button>
+          <button class="pill" data-pill="protein" type="button" aria-pressed="false">High protein</button>
+        </div>
+      </div>
       <div class="dd" data-dd="mealtype">
         <button class="ddbtn" type="button">All meals <span class="cv">▾</span></button>
         <div class="ddmenu">
@@ -141,10 +151,45 @@
       </div>
     </div>
 
-    <div class="pills" id="nPills" role="group" aria-label="Meal list ordering">
-      <button class="pill active" data-pill="all" type="button" aria-pressed="true">All</button>
-      <button class="pill" data-pill="protein" type="button" aria-pressed="false">High protein</button>
-    </div>
+    <form class="card ng-form-card" id="nMealForm" hidden novalidate>
+      <h3 class="card-title" id="nMealFormTitle">New meal</h3>
+      <div class="ng-form-grid">
+        <label class="field ng-wide"><span>Name</span>
+          <input id="mf-name" type="text" maxlength="120" autocomplete="off" aria-describedby="mf-status"></label>
+        <label class="field"><span>Meal type</span>
+          <select class="select" id="mf-type">
+            <option value="">Not set</option>
+            <option value="breakfast">Breakfast</option>
+            <option value="lunch">Lunch</option>
+            <option value="dinner">Dinner</option>
+            <option value="snack">Snack</option>
+          </select></label>
+        <label class="field"><span>Grams per portion</span>
+          <input id="mf-gpp" type="number" min="1" max="5000" step="any" inputmode="decimal"></label>
+        <label class="field"><span>Portions in the batch</span>
+          <input id="mf-portions" type="number" min="1" max="100" step="1" value="1" inputmode="numeric"></label>
+      </div>
+      <p class="label mt-2 mb-1">Nutrients per portion</p>
+      <div class="ng-form-grid">
+        <label class="field"><span>Calories (kcal)</span><input id="mf-kcal" data-nut="kcal" type="number" min="0" step="any" inputmode="decimal"></label>
+        <label class="field"><span>Protein (g)</span><input id="mf-protein" data-nut="protein_g" type="number" min="0" step="any" inputmode="decimal"></label>
+        <label class="field"><span>Carbs (g)</span><input id="mf-carbs" data-nut="carbs_g" type="number" min="0" step="any" inputmode="decimal"></label>
+        <label class="field"><span>Fat (g)</span><input id="mf-fat" data-nut="fat_g" type="number" min="0" step="any" inputmode="decimal"></label>
+        <label class="field"><span>Fibre (g)</span><input id="mf-fibre" data-nut="fiber_g" type="number" min="0" step="any" inputmode="decimal"></label>
+        <label class="field"><span>Vitamin D (µg)</span><input id="mf-vitd" data-nut="vitamin_d_ug" type="number" min="0" step="any" inputmode="decimal"></label>
+        <label class="field"><span>Magnesium (mg)</span><input id="mf-mg" data-nut="magnesium_mg" type="number" min="0" step="any" inputmode="decimal"></label>
+        <label class="field"><span>Iron (mg)</span><input id="mf-fe" data-nut="iron_mg" type="number" min="0" step="any" inputmode="decimal"></label>
+        <label class="field"><span>Zinc (mg)</span><input id="mf-zn" data-nut="zinc_mg" type="number" min="0" step="any" inputmode="decimal"></label>
+      </div>
+      <label class="field mt-2"><span>Ingredients (one per line, optional)</span>
+        <textarea id="mf-ingredients" rows="4" maxlength="20000"></textarea></label>
+      <p class="muted micro m0 mt-2" id="mf-hint">Calories, protein, carbs and fat are required for a new meal. Leave an optional nutrient blank to leave it as it is.</p>
+      <div class="ng-actions mt-2">
+        <button class="ng-btn primary" id="mf-save" type="submit">Save meal</button>
+        <button class="ng-btn" id="mf-cancel" type="button">Cancel</button>
+        <span class="ng-status" id="mf-status" role="alert"></span>
+      </div>
+    </form>
 
     <div id="nMenu" class="grid-2"><p class="dim">Loading…</p></div>
   </div>

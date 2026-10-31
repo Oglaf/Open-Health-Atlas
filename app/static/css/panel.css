@@ -1493,3 +1493,63 @@ table.ltab tr:last-child td { border-bottom: 0; }
 .data-sec { gap: var(--sp-4, 16px); }
 .data-grid { align-items: start; }
 @media (min-width: 900px) { .grid-2 > .card.full { grid-column: 1 / -1; } }
+
+/* Nutrition goals & meals (fork 2026-10-31): a calorie ring split by macro,
+   a stacked macro bar for meal cards, and the inline edit forms. The ring's
+   segment stops (--a/--b) are set from nutrition.js via CSSOM. Macro colours
+   match the recipe detail page: protein ink, carbs good, fat warn. */
+.ng-hero { display: flex; gap: 24px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+.ng-ring {
+  --a: 0%; --b: 0%;
+  position: relative; flex: none; width: 168px; height: 168px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: conic-gradient(var(--ink) 0 var(--a), var(--good) var(--a) var(--b), var(--warn) var(--b) 100%);
+}
+.ng-ring.ng-empty { background: var(--track); }
+.ng-ring::after { content: ""; position: absolute; inset: 18px; border-radius: 50%; background: var(--card-bg); }
+.ng-ring-center { position: relative; z-index: 1; display: flex; flex-direction: column; align-items: center; text-align: center; }
+.ng-big { font: 700 28px var(--disp); }
+.ng-legend { flex: 1 1 200px; min-width: 180px; display: flex; flex-direction: column; }
+.ng-leg-row {
+  display: grid; grid-template-columns: 14px 1fr auto; gap: 10px; align-items: center;
+  padding: 9px 0; border-bottom: 1px solid var(--hair);
+}
+.ng-leg-row:last-child { border-bottom: 0; }
+.ng-dot { width: 10px; height: 10px; border-radius: 3px; }
+.ng-p { background: var(--ink); }
+.ng-c { background: var(--good); }
+.ng-f { background: var(--warn); }
+.ng-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.ng-stack { display: flex; height: 10px; border-radius: 6px; overflow: hidden; background: var(--track); }
+.ng-stack > span { height: 100%; }
+.ng-fill { background: var(--accent); }
+.ng-form { display: grid; gap: 12px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--hair); }
+.ng-form-card { display: grid; gap: 4px; }
+.ng-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.ng-form-grid .ng-wide { grid-column: 1 / -1; }
+.ng-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.ng-status { min-height: 1.2em; margin: 0; font-size: 12px; color: var(--muted); }
+.ng-status.err { color: var(--bad); }
+.ng-micro-row { display: grid; grid-template-columns: minmax(90px, 1fr) 120px 48px auto; gap: 8px; align-items: center; }
+.ng-micro-row .strong { font-size: 13px; }
+.ng-meal-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.ng-meal-actions { display: flex; gap: 6px; align-items: center; }
+.ng-meal-actions .ng-btn { padding: 4px 10px; }
+.ng-meal-kcal { display: flex; align-items: baseline; gap: 8px; margin-top: 10px; }
+.ng-meal-kcal .n { font: 700 24px var(--disp); }
+.ng-meal-legend { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 6px; font-size: 12px; color: var(--muted); }
+.ng-meal-legend .ng-dot { display: inline-block; margin-right: 5px; }
+.ng-btn {
+  border: 1px solid var(--card-border); background: var(--card-bg); color: var(--ink);
+  font: 600 12px var(--ui); padding: 7px 12px; border-radius: 9px; cursor: pointer;
+}
+.ng-btn:hover { background: var(--chip); }
+.ng-btn.danger { color: var(--bad); }
+.ng-btn.primary { background: var(--sidebar-active); color: var(--sidebar-active-ink); border-color: transparent; padding: 8px 16px; font-size: 13px; }
+.ng-btn.primary:hover { filter: brightness(1.12); }
+.ng-btn:disabled { opacity: .5; cursor: default; }
+.ng-form[hidden], .ng-form-card[hidden], .ng-btn[hidden], .ng-actions[hidden] { display: none; }
+@media (max-width: 560px) {
+  .ng-micro-row { grid-template-columns: 1fr 100px auto; }
+  .ng-micro-row .micro { display: none; }
+}

@@ -58,6 +58,11 @@ COMMAND_FLAGS = {
     "log-food":      {"--grams", "--date", "--time", "--meal-type", "--source"},
     "set-batch":     {"--grams"},
     "prep":          {"--portions", "--batch-grams"},
+    # Fork 2026-10-31 (docs/PRODUCT_AUTHORITY.md "meals"): hand-entered meal
+    # CRUD for the Nutrition > Meals tab. meal-save takes its JSON on stdin
+    # (no flags); meal-delete takes one exact recipe_id.
+    "meal-save":     set(),
+    "meal-delete":   set(),
     # §3f V-taper — read-only (import-hevy-body is collector-only, NOT here).
     # Fork 2026-10-28: fitness-tests / athletic-radar / strength-ratios left
     # the allowlist with their pages (owner removal decision).

@@ -4,6 +4,7 @@ from datetime import date, timedelta
 import json
 import math
 import os
+import re
 from pathlib import Path
 
 from .. import events, migrations, runtime
@@ -57,6 +58,177 @@ def recipe_tag(context, a):
         c.execute("UPDATE recipes SET meal_type=? WHERE recipe_id=?", (val, r["recipe_id"]))
         c.commit()
         return {"ok": True, "recipe": r["name"], "meal_type": val}
+    finally:
+        c.close()
+
+
+# Hand-entered meals: payload key -> (stored recipe_nutrients name, unit). The
+# stored names match what the Cronometer importer and compute_nutrients() read.
+MEAL_NUTRIENTS = (
+    ("kcal", "Energy", "kcal"), ("protein_g", "Protein", "g"),
+    ("carbs_g", "Carbs", "g"), ("fat_g", "Fat", "g"), ("fiber_g", "Fiber", "g"),
+    ("vitamin_d_ug", "Vitamin D", "ug"), ("magnesium_mg", "Magnesium", "mg"),
+    ("iron_mg", "Iron", "mg"), ("zinc_mg", "Zinc", "mg"),
+)
+MEAL_REQUIRED = ("kcal", "protein_g", "carbs_g", "fat_g")
+MEAL_FIELDS = {"recipe_id", "name", "meal_type", "grams_per_portion", "portions",
+               "per_portion", "ingredients"}
+
+
+def _meal_number(value, field, *, low, high):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise SystemExit(f"{field} must be a number")
+    value = float(value)
+    if not (math.isfinite(value) and low <= value <= high):
+        raise SystemExit(f"{field} must be between {low:g} and {high:g}")
+    return value
+
+
+def _meal_slug(c, name):
+    base = re.sub(r"[^a-z0-9]+", "-", name.strip().lower()).strip("-")[:120] or "meal"
+    rid, n = base, 1
+    while c.execute("SELECT 1 FROM recipes WHERE recipe_id=?", (rid,)).fetchone():
+        n += 1
+        rid = f"{base}-{n}"
+    return rid
+
+
+def _write_meal_ingredients(context, rid, name, lines):
+    """Replace (or, for an empty list, remove) the free-text ingredient sidecar."""
+    target = recipe_ingredients_path(rid, vault=context.vault)
+    if not lines:
+        if os.path.exists(target):
+            os.unlink(target)
+        return
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    document = {"recipe_id": rid, "recipe_name": name,
+                "ingredients": [{"name": line} for line in lines],
+                "updated_at": context.clock().isoformat(timespec="seconds")}
+    tmp = Path(target).with_name(f"{Path(target).name}.tmp.{os.getpid()}")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(document, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+        os.replace(tmp, target)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def meal_save(context, a, *, stdin):
+    """Create or update one hand-entered meal from JSON on stdin.
+
+    The caller supplies PER-PORTION nutrients; they are stored as the batch
+    total (per-portion x portions) in recipe_nutrients, the same shape the
+    importer writes, so eat/menu/detail math is unchanged. Creating requires
+    kcal, protein, carbs and fat; updating rewrites only the nutrients
+    supplied, and the rest are kept and rescaled when the batch weight
+    changes. Past nutrition_log rows are never touched.
+    """
+    raw = stdin_text(stdin, "meal")
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"meal must be valid JSON: {exc.msg}")
+    if not isinstance(payload, dict):
+        raise SystemExit("meal must be a JSON object")
+    unexpected = set(payload) - MEAL_FIELDS
+    if unexpected:
+        raise SystemExit(f"unsupported meal fields: {', '.join(sorted(unexpected))}")
+
+    name = payload.get("name")
+    if not isinstance(name, str) or not 1 <= len(name.strip()) <= 120:
+        raise SystemExit("name must be 1-120 characters")
+    name = name.strip()
+    meal_type = payload.get("meal_type")
+    if meal_type is not None and meal_type not in MEAL_TYPES:
+        raise SystemExit(f"meal_type must be one of: {', '.join(MEAL_TYPES)}")
+    gpp = _meal_number(payload.get("grams_per_portion"), "grams_per_portion", low=1, high=5000)
+    portions = _meal_number(payload.get("portions", 1), "portions", low=1, high=100)
+    if portions != int(portions):
+        raise SystemExit("portions must be a whole number")
+    portions = int(portions)
+    per = payload.get("per_portion")
+    if not isinstance(per, dict):
+        raise SystemExit("per_portion must be an object")
+    known = {key for key, _name, _unit in MEAL_NUTRIENTS}
+    if set(per) - known:
+        raise SystemExit(f"unsupported per_portion fields: {', '.join(sorted(set(per) - known))}")
+    amounts = {key: _meal_number(value, key, low=0, high=100_000)
+               for key, value in per.items() if value is not None}
+    lines = None
+    if "ingredients" in payload:
+        lines = payload["ingredients"]
+        if not isinstance(lines, list) or len(lines) > 100 or any(
+                not isinstance(x, str) or not 1 <= len(x.strip()) <= 200 for x in lines):
+            raise SystemExit("ingredients must be a list of up to 100 lines of 1-200 characters")
+        lines = [x.strip() for x in lines]
+
+    batch = round(gpp * portions, 3)
+    c = runtime.connect(context.database)
+    try:
+        with c:
+            migrations.require_table(c, "recipes", ("meal_type",))
+            rid = payload.get("recipe_id")
+            existing = None
+            if rid is not None:
+                existing = c.execute("SELECT * FROM recipes WHERE recipe_id=?", (rid,)).fetchone()
+                if not existing:
+                    raise SystemExit(f"meal not found: {rid}")
+            missing = [key for key in MEAL_REQUIRED if per.get(key) is None]
+            if existing is None and missing:
+                raise SystemExit(f"per_portion requires: {', '.join(missing)}")
+            clash = c.execute("SELECT 1 FROM recipes WHERE lower(name)=lower(?) AND recipe_id IS NOT ?",
+                              (name, rid)).fetchone()
+            if clash:
+                raise SystemExit(f"a meal named '{name}' already exists")
+            if existing is None:
+                rid = _meal_slug(c, name)
+                c.execute("""INSERT INTO recipes(recipe_id,name,batch_grams,grams_per_portion,portions,source,meal_type)
+                             VALUES(?,?,?,?,?,'manual',?)""", (rid, name, batch, gpp, portions, meal_type))
+            else:
+                old_batch = existing["batch_grams"]
+                c.execute("UPDATE recipes SET name=?, batch_grams=?, grams_per_portion=?, portions=? WHERE recipe_id=?",
+                          (name, batch, gpp, portions, rid))
+                if "meal_type" in payload:
+                    c.execute("UPDATE recipes SET meal_type=? WHERE recipe_id=?", (meal_type, rid))
+                if old_batch and old_batch != batch:
+                    c.execute("UPDATE recipe_nutrients SET per_gram = per_gram / ? * ? WHERE recipe_id=?",
+                              (old_batch, batch, rid))
+            for key, stored, unit in MEAL_NUTRIENTS:
+                if key in amounts:
+                    c.execute("DELETE FROM recipe_nutrients WHERE recipe_id=? AND lower(nutrient)=lower(?)",
+                              (rid, stored))
+                    c.execute("INSERT INTO recipe_nutrients(recipe_id,nutrient,unit,per_gram) VALUES(?,?,?,?)",
+                              (rid, stored, unit, round(amounts[key] * portions, 6)))
+            if lines is not None:
+                _write_meal_ingredients(context, rid, name, lines)
+        return {"ok": True, "recipe_id": rid, "name": name, "created": existing is None,
+                "batch_grams": batch, "grams_per_portion": gpp, "portions": portions}
+    finally:
+        c.close()
+
+
+def meal_delete(context, a):
+    """Delete one meal by exact recipe_id: its nutrients, freezer portions,
+    restock state and ingredient sidecar. nutrition_log rows stay (they carry
+    their own name and macros)."""
+    c = runtime.connect(context.database)
+    try:
+        with c:
+            r = c.execute("SELECT recipe_id,name FROM recipes WHERE recipe_id=?", (a.recipe,)).fetchone()
+            if not r:
+                raise SystemExit(f"meal not found: {a.recipe}")
+            rid = r["recipe_id"]
+            freezer = c.execute("DELETE FROM meal_inventory WHERE recipe_id=?", (rid,)).rowcount
+            c.execute("DELETE FROM recipe_nutrients WHERE recipe_id=?", (rid,))
+            if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='recipe_restock_state'").fetchone():
+                c.execute("DELETE FROM recipe_restock_state WHERE recipe_id=?", (rid,))
+            c.execute("DELETE FROM recipes WHERE recipe_id=?", (rid,))
+            target = recipe_ingredients_path(rid, vault=context.vault)
+            if os.path.exists(target):
+                os.unlink(target)
+        return {"ok": True, "deleted": r["name"], "recipe_id": rid, "inventory_rows_removed": freezer}
     finally:
         c.close()
 

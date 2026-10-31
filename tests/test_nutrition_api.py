@@ -24,7 +24,9 @@ SCHEMA = (pathlib.Path(__file__).resolve().parent.parent / "toolkit" / "SCHEMA.s
 
 @pytest.mark.parametrize("scenario", [
     "ready", "missing_profile", "missing_weight", "missing_configuration",
-    "transport_error", "meal_share_of_goal",
+    "transport_error", "owner_micros_read_only", "goals_editable", "phase_switch",
+    "micro_targets_editable", "meal_share_of_goal", "meal_create",
+    "meal_edit_changed_fields", "meal_delete_confirms",
 ])
 def test_browser_nutrition_target_states(scenario):
     node = shutil.which("node")
@@ -767,3 +769,44 @@ def test_requires_auth(tmp_path):
     assert c.get("/api/nutrition/targets").status_code == 401
     assert c.get("/api/nutrition/coverage").status_code == 401
     assert c.get("/api/nutrition/recipe-gaps").status_code == 401
+
+
+def test_meal_save_sends_the_validated_document_on_stdin(client, monkeypatch):
+    sent = []
+    monkeypatch.setattr(bridge, "run", lambda sub, *a, **k: (sent.append((sub, list(a), k.get("stdin"))) or {"ok": True}))
+    meal = {"name": "Fictional bowl", "grams_per_portion": 300, "portions": 2,
+            "per_portion": {"kcal": 450, "protein_g": 20, "carbs_g": 60, "fat_g": 12}}
+    r = client.post("/api/nutrition/meal", json=meal)
+    assert r.status_code == 200 and r.get_json()["ok"] is True
+    assert sent[-1][0] == "meal-save" and sent[-1][1] == []
+    assert json.loads(sent[-1][2]) == meal
+    edit = {**meal, "recipe_id": "fictional-bowl"}
+    assert client.post("/api/nutrition/meal", json=edit).status_code == 200
+    assert json.loads(sent[-1][2])["recipe_id"] == "fictional-bowl"
+
+
+@pytest.mark.parametrize("body", [
+    None, [], {"name": ""}, {"name": "x", "surprise": 1}, {"name": "x", "recipe_id": "--evil"},
+    {"name": "x", "recipe_id": "Has Caps"}, {"recipe_id": "ok-id"},
+])
+def test_meal_save_rejects_bad_requests_before_the_bridge(client, monkeypatch, body):
+    sent = []
+    monkeypatch.setattr(bridge, "run", lambda *a, **k: sent.append(a) or {"ok": True})
+    r = client.post("/api/nutrition/meal", json=body)
+    assert r.status_code == 400 and sent == []
+
+
+def test_meal_delete_maps_to_the_bridge_and_validates_the_id(client):
+    assert client.post("/api/nutrition/meal/sample-stew/delete").status_code == 200
+    assert client.calls[-1] == ("meal-delete", ["sample-stew"])
+    n = len(client.calls)
+    assert client.post("/api/nutrition/meal/Bad%20Id/delete").status_code == 400
+    assert len(client.calls) == n
+
+
+def test_meal_routes_require_login(tmp_path):
+    app = create_app({"TESTING": True, "WTF_CSRF_ENABLED": False, "RATELIMIT_ENABLED": False,
+                      "PANEL_DB": str(tmp_path / "p.db"), "PANEL_COOKIE_SECURE": False})
+    c = app.test_client()
+    assert c.post("/api/nutrition/meal", json={"name": "x"}).status_code == 401
+    assert c.post("/api/nutrition/meal/sample-stew/delete").status_code == 401
