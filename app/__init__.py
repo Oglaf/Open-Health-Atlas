@@ -3,6 +3,7 @@
 Protected routes require a server-side passkey session. Health records are
 read through request-scoped connections; mutations cross the write broker.
 """
+import hashlib
 import os
 
 import click
@@ -57,6 +58,36 @@ def create_app(overrides: dict | None = None) -> Flask:
         app.config["PANEL_DB"] = os.path.join(app.instance_path, "panel.db")
     if overrides:
         app.config.update(overrides)
+
+    # Content-hash every static URL (?v=...). Without it a redeploy behind a CDN
+    # or a browser cache pairs the new HTML with the previous deploy's cached
+    # JS/CSS: new cards that never load, unstyled layouts. A versioned URL
+    # changes whenever its file does, so it can safely be cached for a year.
+    static_versions = {}
+
+    def static_version(filename):
+        root = os.path.abspath(app.static_folder)
+        path = os.path.abspath(os.path.join(root, filename))
+        if os.path.commonpath([root, path]) != root or not os.path.isfile(path):
+            return None
+        info = os.stat(path)
+        stamp = (info.st_mtime_ns, info.st_size)
+        cached = static_versions.get(path)
+        if cached is None or cached[0] != stamp:
+            with open(path, "rb") as f:
+                cached = (stamp, hashlib.sha256(f.read()).hexdigest()[:12])
+            static_versions[path] = cached
+        return cached[1]
+
+    @app.url_defaults
+    def version_static_urls(endpoint, values):
+        if endpoint == "static" and "v" not in values and values.get("filename"):
+            try:
+                version = static_version(values["filename"])
+            except (OSError, ValueError):
+                version = None
+            if version:
+                values["v"] = version
 
     # A reverse proxy may terminate TLS and forward plain HTTP with
     # X-Forwarded-* headers. Trust ONE hop of X-Forwarded-Proto ONLY, so
@@ -168,6 +199,10 @@ def create_app(overrides: dict | None = None) -> Flask:
         # same-origin Referer on secure POSTs; with this policy the referrer is
         # sent only to the panel itself, so nothing leaks cross-origin.
         resp.headers["Referrer-Policy"] = "same-origin"
+        if request.endpoint == "static" and resp.status_code == 200:
+            # versioned URLs never change meaning; an unversioned one must revalidate
+            resp.headers["Cache-Control"] = (
+                "public, max-age=31536000, immutable" if "v" in request.args else "no-cache")
         return resp
 
     @app.cli.command("enroll-token")

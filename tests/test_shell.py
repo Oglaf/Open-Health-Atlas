@@ -205,6 +205,32 @@ def test_nutrition_page_uses_no_inline_styles(authed):
     assert 'style="' not in js
 
 
+def test_static_urls_carry_a_content_hash_and_cache_accordingly(authed, app):
+    """A redeploy behind a CDN must never pair new HTML with the old JS/CSS."""
+    import os
+    import re
+    pattern = r"/static/js/nutrition\.js\?v=([0-9a-f]{12})"
+    html = authed.get("/nutrition").get_data(as_text=True)
+    js = re.search(pattern, html)
+    assert js, "static URLs must be versioned"
+    assert re.search(r"/static/css/panel\.css\?v=[0-9a-f]{12}", html)
+    versioned = authed.get(f"/static/js/nutrition.js?v={js.group(1)}")
+    assert versioned.status_code == 200
+    assert versioned.headers["Cache-Control"] == "public, max-age=31536000, immutable"
+    assert authed.get("/static/js/nutrition.js").headers["Cache-Control"] == "no-cache"
+    # the version follows the file's content, so an edited asset gets a new URL
+    path = os.path.join(app.static_folder, "js", "nutrition.js")
+    original = open(path, "rb").read()
+    try:
+        with open(path, "ab") as f:
+            f.write(b"\n// changed\n")
+        again = re.search(pattern, authed.get("/nutrition").get_data(as_text=True))
+        assert again and again.group(1) != js.group(1)
+    finally:
+        with open(path, "wb") as f:
+            f.write(original)
+
+
 def test_security_headers_on_public_page(client):
     r = client.get("/login")
     csp = r.headers.get("Content-Security-Policy", "")
