@@ -205,6 +205,26 @@ def test_nutrition_page_uses_no_inline_styles(authed):
     assert 'style="' not in js
 
 
+def test_profile_page_keeps_only_what_nutrition_goals_does_not_cover(authed):
+    html = authed.get("/profile").get_data(as_text=True)
+    # still here: profile details, the phase offsets / protein per kg, planned times
+    for kept in ("pf-profile-save", "pf-phase-offset-rows", "pf-protein-per-kg-rows",
+                 "pf-nutrition-config-save", "pf-planned-table"):
+        assert f'id="{kept}"' in html, f"{kept} should stay on the Profile page"
+    # moved to Nutrition > Goals: the phase, the calorie/protein overrides, the micros
+    for moved in ("pf-phase", "pf-phase-save", "pf-target-kcal", "pf-target-protein",
+                  "pf-targets-save", "pf-engine-band", "pf-micro-rows", "pf-micro-add-btn"):
+        assert f'id="{moved}"' not in html, f"{moved} now lives on Nutrition > Goals"
+    assert "Diet phase" not in html and "Daily targets" not in html
+    js = authed.get("/static/js/profile.js").get_data(as_text=True)
+    for gone in ("pf-phase-save", "pf-targets-save", "pf-micro-add-btn", "nutrient_targets"):
+        assert gone not in js
+    # the Nutrition setup help points at the tab that now owns those settings
+    help_text = authed.get("/nutrition").get_data(as_text=True)
+    assert "under Micronutrients below" in help_text
+    assert "diet phase, and daily kcal/protein overrides" not in help_text
+
+
 def test_static_urls_carry_a_content_hash_and_cache_accordingly(authed, app):
     """A redeploy behind a CDN must never pair new HTML with the old JS/CSS."""
     import os

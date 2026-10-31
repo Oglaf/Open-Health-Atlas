@@ -1,6 +1,8 @@
 /* Profile & targets (fork owner decision 2026-10-29, docs/PRODUCT_AUTHORITY.md):
-   the logged-in user's own owner_profile/phase/nutrition_targets/planned_times
-   config, plus (non-owner only) their profile.json nutrition overlay. Strict
+   the logged-in user's own owner_profile and planned_times config, plus
+   (non-owner only) the phase offsets and protein per kg of their profile.json
+   nutrition overlay. Diet phase, calorie/protein overrides and micronutrient
+   targets moved to Nutrition > Goals. Strict
    CSP (script-src 'self', no inline JS/CSS) — everything lives here. DOM is
    built with textContent/createElement only; nothing from the server is ever
    assigned via innerHTML. */
@@ -42,73 +44,6 @@
     $("pf-dob").value = p.dob || "";
     $("pf-height").value = p.height_cm != null ? p.height_cm : "";
     $("pf-activity").value = p.activity_fallback || "";
-  }
-
-  function renderPhase() {
-    if (state.phase) $("pf-phase").value = state.phase;
-    $("pf-phase-started").textContent = state.phase_started
-      ? `Current phase started ${state.phase_started}.`
-      : "Phase not set yet.";
-  }
-
-  function renderTargets() {
-    const t = state.targets || {};
-    $("pf-target-kcal").value = t.kcal != null ? t.kcal : "";
-    $("pf-target-protein").value = t.protein_g != null ? t.protein_g : "";
-
-    const engine = state.engine || {};
-    const reasonEl = $("pf-engine-reason");
-    const bandEl = $("pf-engine-band");
-    if (engine.status === "ok") {
-      reasonEl.hidden = true;
-      const kcal = engine.targets && engine.targets.kcal;
-      const protein = engine.targets && engine.targets.protein_g;
-      bandEl.textContent = kcal
-        ? `Computed band: ${kcal.band_low}–${kcal.band_high} kcal · protein ${protein ? protein.target : "—"} g`
-        : "";
-    } else {
-      reasonEl.hidden = false;
-      reasonEl.textContent = "Targets engine: " + (engine.reason || engine.error || "not yet available");
-      bandEl.textContent = "";
-    }
-  }
-
-  function microRow(name, target) {
-    const row = document.createElement("label");
-    row.className = "field";
-    row.dataset.name = name;
-    const span = document.createElement("span");
-    span.textContent = labelFor(name);
-    row.appendChild(span);
-    const wrap = document.createElement("div");
-    wrap.className = "row gap-2";
-    const input = document.createElement("input");
-    input.type = "number";
-    input.step = "any";
-    input.min = "0";
-    input.value = target;
-    wrap.appendChild(input);
-    const removeBtn = document.createElement("button");
-    removeBtn.type = "button";
-    removeBtn.className = "btn quiet";
-    removeBtn.textContent = "Remove";
-    removeBtn.addEventListener("click", () => { row.remove(); refreshMicroAddOptions(); });
-    wrap.appendChild(removeBtn);
-    row.appendChild(wrap);
-    return row;
-  }
-
-  function refreshMicroAddOptions() {
-    const used = new Set([...$("pf-micro-rows").children].map((row) => row.dataset.name));
-    const select = $("pf-micro-add-name");
-    select.replaceChildren();
-    for (const name of state.catalog.micro_target_names) {
-      if (used.has(name)) continue;
-      const opt = document.createElement("option");
-      opt.value = name;
-      opt.textContent = labelFor(name);
-      select.appendChild(opt);
-    }
   }
 
   function phaseTriple(containerId, values) {
@@ -162,14 +97,6 @@
     form.hidden = false;
 
     const cfg = state.nutrition_config || {};
-    const rows = $("pf-micro-rows");
-    rows.replaceChildren();
-    const micros = cfg.nutrient_targets || {};
-    for (const name of Object.keys(micros).sort()) {
-      rows.appendChild(microRow(name, micros[name]));
-    }
-    refreshMicroAddOptions();
-
     phaseTriple("pf-phase-offset-rows", cfg.phase_offsets);
     phaseTriple("pf-protein-per-kg-rows", cfg.protein_per_kg);
   }
@@ -237,8 +164,6 @@
 
   function renderAll() {
     renderProfile();
-    renderPhase();
-    renderTargets();
     renderNutritionConfig();
     renderPlannedTimes();
   }
@@ -276,71 +201,10 @@
     }
   });
 
-  $("pf-phase-save").addEventListener("click", async () => {
-    const status = $("pf-phase-status");
-    const btn = $("pf-phase-save");
-    btn.disabled = true;
-    status.textContent = "Saving…";
-    try {
-      await post("/api/profile/phase", { phase: $("pf-phase").value });
-      status.textContent = "Saved.";
-      toast("Phase saved", "good");
-      await load();
-    } catch (e) {
-      status.textContent = "Couldn't save: " + e.message;
-    } finally {
-      btn.disabled = false;
-    }
-  });
-
-  $("pf-targets-save").addEventListener("click", async () => {
-    const status = $("pf-targets-status");
-    const kcalRaw = $("pf-target-kcal").value.trim();
-    const proteinRaw = $("pf-target-protein").value.trim();
-    if (!kcalRaw && !proteinRaw) { status.textContent = "Nothing to save."; return; }
-    const btn = $("pf-targets-save");
-    btn.disabled = true;
-    status.textContent = "Saving…";
-    try {
-      if (kcalRaw) await post("/api/profile/targets", { name: "kcal", target: Number(kcalRaw) });
-      if (proteinRaw) await post("/api/profile/targets", { name: "protein_g", target: Number(proteinRaw) });
-      status.textContent = "Saved.";
-      toast("Targets saved", "good");
-      await load();
-    } catch (e) {
-      status.textContent = "Couldn't save: " + e.message;
-    } finally {
-      btn.disabled = false;
-    }
-  });
-
-  $("pf-micro-add-btn").addEventListener("click", () => {
-    const name = $("pf-micro-add-name").value;
-    const target = $("pf-micro-add-target").value.trim();
-    if (!name || target === "") return;
-    const n = Number(target);
-    if (!Number.isFinite(n) || n <= 0) {
-      $("pf-nutrition-config-status").textContent = "Target must be a positive number.";
-      return;
-    }
-    $("pf-micro-rows").appendChild(microRow(name, n));
-    $("pf-micro-add-target").value = "";
-    refreshMicroAddOptions();
-  });
-
   $("pf-nutrition-config-save").addEventListener("click", async () => {
     const status = $("pf-nutrition-config-status");
     const patch = {};
     try {
-      const micros = {};
-      for (const row of $("pf-micro-rows").children) {
-        const n = Number(row.querySelector("input").value);
-        if (!Number.isFinite(n) || n <= 0) {
-          throw new Error(`${labelFor(row.dataset.name)} must be a positive number`);
-        }
-        micros[row.dataset.name] = n;
-      }
-      patch.nutrient_targets = micros;
       const offsets = readPhaseTriple("pf-phase-offset-rows");
       if (offsets !== undefined) patch.phase_offsets = offsets;
       const perKg = readPhaseTriple("pf-protein-per-kg-rows");
@@ -349,6 +213,7 @@
       status.textContent = e.message;
       return;
     }
+    if (Object.keys(patch).length === 0) { status.textContent = "Nothing to save."; return; }
     const btn = $("pf-nutrition-config-save");
     btn.disabled = true;
     status.textContent = "Saving…";

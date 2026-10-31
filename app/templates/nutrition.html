@@ -50,9 +50,9 @@
         <li>Weight: a body-weight record on or before today.</li>
         <li>Configuration: micronutrient targets, phase offsets and protein targets.</li>
       </ul>
-      <p class="note-txt">Set your profile, diet phase, and daily kcal/protein overrides from <a href="{{ url_for('core.profile') }}">Profile &amp; targets</a>. Record weight through the supported <code>log body_metrics</code> command or an importer.</p>
-      <p class="note-txt">Micronutrient targets, phase offsets, and protein-per-kg are also editable from <a href="{{ url_for('core.profile') }}">Profile &amp; targets</a> for a family member account. The bootstrap owner account reads these three from its installation configuration instead (fork owner decision 2026-10-29, docs/PRODUCT_AUTHORITY.md) — set them with the OpenHealthAtlas command-line toolkit's <code>HERMES_NUTRIENT_TARGETS_JSON</code>/<code>HERMES_PHASE_OFFSETS_JSON</code>/<code>HERMES_PROTEIN_PER_KG_JSON</code> environment variables, or ask an admin to create a separate family member account.</p>
-      <p class="muted note-txt">After saving, run <code>nutrition-targets</code> (or just reload this page) to check the result.</p>
+      <p class="note-txt">Set your profile details (sex, date of birth, height) and, for a family member account, the phase offsets and protein per kg in <a href="{{ url_for('core.profile') }}">Profile &amp; targets</a>. Record weight through the supported <code>log body_metrics</code> command or an importer.</p>
+      <p class="note-txt">Micronutrient targets are set right here, under Micronutrients below, for a family member account. The bootstrap owner account reads micronutrient targets, phase offsets and protein per kg from its installation configuration instead (fork owner decision 2026-10-29, docs/PRODUCT_AUTHORITY.md) — set them with the OpenHealthAtlas command-line toolkit's <code>HERMES_NUTRIENT_TARGETS_JSON</code>/<code>HERMES_PHASE_OFFSETS_JSON</code>/<code>HERMES_PROTEIN_PER_KG_JSON</code> environment variables, or ask an admin to create a separate family member account.</p>
+      <p class="muted note-txt">Once everything is set, your goals appear on this tab — reload the page to check.</p>
     </details>
   </section>
 

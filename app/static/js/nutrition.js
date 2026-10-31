@@ -154,15 +154,17 @@
     const box = $("nMicroChips");
     const micros = (t.status === "ok" ? (t.targets.micros || []) : []).filter((m) => m.target != null)
       .sort((a, b) => microRank(a.nutrient) - microRank(b.nutrient));
+    const canEdit = !!(profileInfo && profileInfo.per_user_overlay_supported);
     if (!micros.length) {
       box.replaceChildren(Object.assign(document.createElement("span"), {
         className: "muted micro",
-        textContent: t.status === "ok" ? "No micronutrient targets configured." : "Available once targets are calculated.",
+        textContent: canEdit
+          ? "No targets set yet. Choose Edit targets to enter the ten daily targets your goals are calculated from."
+          : t.status === "ok" ? "No micronutrient targets configured." : "Available once targets are calculated.",
       }));
     } else {
       box.replaceChildren(...micros.map(microTile));
     }
-    const canEdit = !!(profileInfo && profileInfo.per_user_overlay_supported);
     $("nMicroEditBtn").hidden = !canEdit;
     setText("nMicroNote", profileInfo && !profileInfo.per_user_overlay_supported
       ? "Micronutrient targets for this account come from the installation configuration and can't be edited here."

@@ -76,6 +76,9 @@ async function unavailableTargets(reason) {
   assert.equal(h.node('nTgtReload').hidden,true);
   assert.equal(h.node('nTgtCal').textContent,'—');
   assert.equal(h.node('nGoalEditBtn').hidden,true);
+  // a member can still enter the micronutrient targets that unblock everything else
+  assert.equal(h.node('nMicroEditBtn').hidden,false);
+  assert.ok(h.node('nMicroChips').children[0].textContent.includes('Choose Edit targets'));
   assert.equal(h.node('nTgtWater').textContent.replace(',','.'),'3.0 L');
   assert.ok(!h.node('nTgtReason').innerHTML.includes('<script>'));
   assert.equal(h.reads.filter(url=>url==='/api/nutrition/targets').length,1);

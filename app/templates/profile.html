@@ -2,16 +2,19 @@
 {% block title %}Profile & targets{% endblock %}
 {% block content %}
 {# Self-service Profile & targets (fork owner decision 2026-10-29,
-   docs/PRODUCT_AUTHORITY.md): the logged-in user's own owner_profile/phase/
-   nutrition_targets/planned_times config, plus (non-owner only) their own
-   profile.json nutrition overlay. Every write crosses /api/profile/* -> the
-   broker (app/bridge.py), exactly like every other panel write. #}
+   docs/PRODUCT_AUTHORITY.md): the logged-in user's own owner_profile and
+   planned_times config, plus (non-owner only) the phase offsets and protein
+   per kg of their profile.json nutrition overlay. The diet phase, the
+   calorie/protein overrides and the micronutrient targets are edited on
+   Nutrition > Goals (2026-10-31); this page keeps what that tab doesn't cover.
+   Every write crosses /api/profile/* -> the broker (app/bridge.py), exactly
+   like every other panel write. #}
 <div class="vstack">
   <div class="row-top between wrap">
     <div class="crumb">
       <a class="back" href="{{ url_for('core.dashboard') }}">◱ Hub</a>
       <h1 class="page-title">Profile & targets</h1>
-      <span class="muted micro">your own profile, diet phase, and nutrition targets</span>
+      <span class="muted micro">your profile details, phase offsets and planned times</span>
     </div>
   </div>
 
@@ -52,55 +55,13 @@
     <p class="field-hint" id="pf-profile-status" role="status" aria-live="polite"></p>
   </div>
 
-  <div class="card">
-    <h3 class="card-title mb-2">Diet phase</h3>
-    <div class="field-row">
-      <label class="field">
-        <span>Phase</span>
-        <select id="pf-phase" class="select">
-          <option value="cut">Cut</option>
-          <option value="maintain">Maintain</option>
-          <option value="bulk">Bulk</option>
-        </select>
-      </label>
-    </div>
-    <p class="muted note-txt" id="pf-phase-started"></p>
-    <button id="pf-phase-save" class="save-btn" type="button">Save phase</button>
-    <p class="field-hint" id="pf-phase-status" role="status" aria-live="polite"></p>
-  </div>
-
-  <div class="card">
-    <h3 class="card-title mb-2">Daily targets</h3>
-    <p class="muted note-txt" id="pf-engine-reason" hidden></p>
-    <div class="field-row">
-      <label class="field">
-        <span>Daily kcal (override)</span>
-        <input id="pf-target-kcal" type="number" step="any" min="1">
-      </label>
-      <label class="field">
-        <span>Daily protein g (override)</span>
-        <input id="pf-target-protein" type="number" step="any" min="1">
-      </label>
-    </div>
-    <p class="muted note-txt" id="pf-engine-band"></p>
-    <button id="pf-targets-save" class="save-btn" type="button">Save targets</button>
-    <p class="field-hint" id="pf-targets-status" role="status" aria-live="polite"></p>
-  </div>
-
   <div class="card" id="pf-nutrition-config-card">
     <h3 class="card-title mb-2">Nutrition detail</h3>
+    <p class="muted note-txt mb-2">Micronutrient targets, the diet phase and your calorie and protein goals are on the Nutrition page, under Goals.</p>
     <div id="pf-nutrition-config-unavailable" hidden>
       <p class="field-hint" role="status"></p>
     </div>
     <div id="pf-nutrition-config-form">
-      <p class="muted note-txt mb-2">Micronutrient targets</p>
-      <div class="field-row" id="pf-micro-rows"></div>
-      <div class="row gap-2 mb-3">
-        <select id="pf-micro-add-name" class="select"></select>
-        <input id="pf-micro-add-target" type="number" step="any" min="0" placeholder="target">
-        <button id="pf-micro-add-btn" class="btn quiet" type="button">Add</button>
-      </div>
-
       <p class="muted note-txt mb-2">Phase offsets (kcal, relative to maintenance)</p>
       <div class="field-row mb-3" id="pf-phase-offset-rows"></div>
 
