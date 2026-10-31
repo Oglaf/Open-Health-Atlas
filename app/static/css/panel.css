@@ -1557,3 +1557,22 @@ table.ltab tr:last-child td { border-bottom: 0; }
 .ng-btn.primary:hover { filter: brightness(1.12); }
 .ng-btn:disabled { opacity: .5; cursor: default; }
 .ng-form[hidden], .ng-form-card[hidden], .ng-btn[hidden], .ng-actions[hidden], .ng-tiles[hidden] { display: none; }
+
+/* Nutrition polish: keyboard focus for the controls this page draws itself,
+   tabular figures for every number that is compared, and touch-sized targets. */
+.ng-btn:focus-visible, .seg button:focus-visible, .tabrow button:focus-visible,
+.ddbtn:focus-visible, .ddmenu button:focus-visible, .ng-form-card select:focus-visible,
+.ng-form input:focus-visible, .ng-form-card input:focus-visible, .ng-form-card textarea:focus-visible,
+.ng-meal-head a:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.ng-big, .ng-tile-val, .ng-meal-kcal .n, .goal-val, .ng-leg-row .goal-val,
+.ng-meal-legend, #nTgtBand { font-variant-numeric: tabular-nums; }
+.ng-btn:active { transform: translateY(1px); }
+.ng-btn.danger:hover { background: var(--chip); }
+.field input[aria-invalid="true"] { border-color: var(--bad); }
+@media (pointer: coarse) {
+  .ng-btn, .ng-meal-actions .ng-btn { min-height: 44px; padding-inline: 14px; }
+  .seg button, .tabrow button { min-height: 40px; }
+  .ng-meal-head a { display: inline-flex; align-items: center; min-height: 44px; }
+}
+.ng-tile .label { overflow-wrap: anywhere; }
+.ng-form-grid .field input { min-width: 0; font-variant-numeric: tabular-nums; }

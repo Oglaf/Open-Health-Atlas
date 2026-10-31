@@ -136,6 +136,7 @@
   function microTile(m) {
     const tile = document.createElement("div");
     tile.className = "ng-tile";
+    tile.setAttribute("role", "listitem");
     const name = document.createElement("span");
     name.className = "label";
     name.textContent = microLabel(m.nutrient);
@@ -228,6 +229,7 @@
   function closeGoalForm() {
     $("nGoalForm").hidden = true;
     $("nGoalEditBtn").hidden = false;
+    $("nGoalEditBtn").focus();
   }
   $("nGoalCancel").addEventListener("click", closeGoalForm);
   $("nGoalForm").addEventListener("submit", async (ev) => {
@@ -240,6 +242,8 @@
       const n = parseFloat($(id).value);
       if (!Number.isFinite(n) || n < lo || n > hi) {
         status("nGoalStatus", `${label} must be between ${lo} and ${hi}.`, true);
+        $(id).setAttribute("aria-invalid", "true");
+        $(id).focus();
         return;
       }
       if (Math.round(n) !== Math.round(current)) changes.push([name, n]);
@@ -284,6 +288,8 @@
     text.textContent = `${microLabel(name)} (${unit})`;
     const input = document.createElement("input");
     input.type = "number"; input.min = "0"; input.step = "any";
+    input.inputMode = "decimal"; input.autocomplete = "off";
+    input.setAttribute("aria-describedby", "nMicroStatus");
     input.dataset.micro = name;
     input.value = target == null ? "" : target;
     label.append(text, input);
@@ -299,24 +305,39 @@
     $("nMicroForm").hidden = false;
     $("nMicroChips").hidden = true;
     $("nMicroEditBtn").hidden = true;
+    const first = $("nMicroFields").querySelector("input");
+    if (first) first.focus();
   });
+  $("nMicroForm").addEventListener("keydown", (ev) => { if (ev.key === "Escape") closeMicroForm(); });
   function closeMicroForm() {
     $("nMicroForm").hidden = true;
     $("nMicroChips").hidden = false;
     $("nMicroEditBtn").hidden = !(profileInfo && profileInfo.per_user_overlay_supported);
+    $("nMicroEditBtn").focus();
   }
   $("nMicroCancel").addEventListener("click", closeMicroForm);
   $("nMicroForm").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const targets = {};
+    const invalid = [];
     for (const label of $("nMicroFields").children) {
       const input = label.children[1];
       const n = parseFloat(input.value);
+      input.removeAttribute("aria-invalid");
       if (!Number.isFinite(n) || n <= 0) {
-        status("nMicroStatus", `Every nutrient needs a target above zero — ${microLabel(input.dataset.micro)} is missing.`, true);
-        return;
+        input.setAttribute("aria-invalid", "true");
+        invalid.push(input);
+      } else {
+        targets[input.dataset.micro] = n;
       }
-      targets[input.dataset.micro] = n;
+    }
+    if (invalid.length) {
+      const names = invalid.map((i) => microLabel(i.dataset.micro));
+      status("nMicroStatus", invalid.length === 1
+        ? `Every nutrient needs a target above zero — ${names[0]} is missing.`
+        : `Every nutrient needs a target above zero — ${invalid.length} are missing: ${names.join(", ")}.`, true);
+      invalid[0].focus();
+      return;
     }
     const btn = $("nMicroSave");
     btn.disabled = true;
@@ -382,6 +403,7 @@
     const ok = t && t.status === "ok";
     const card = document.createElement("div");
     card.className = "card";
+    card.dataset.rid = rid;
     const confirming = pendingDelete === rid;
     let html = `<div class="ng-meal-head"><div><span class="strong">${esc(r.name)}</span>` +
       (r.meal_type ? ` <span class="chip muted">${esc(r.meal_type)}</span>` : "") + `</div>` +
@@ -440,10 +462,17 @@
     return card;
   }
 
+  // renderMenu rebuilds the cards, so put keyboard focus back on the matching control.
+  function focusAct(rid, act) {
+    const card = [...$("nMenu").children].find((c) => c.dataset.rid === rid);
+    const el = card && card.querySelector(`[data-act="${act}"]`);
+    if (el) el.focus();
+  }
+
   async function mealAction(act, r, btn) {
     if (act === "edit") { openMealForm(r); return; }
-    if (act === "delete") { pendingDelete = r.recipe_id; renderMenu(); return; }
-    if (act === "cancel") { pendingDelete = null; renderMenu(); return; }
+    if (act === "delete") { pendingDelete = r.recipe_id; renderMenu(); focusAct(r.recipe_id, "cancel"); return; }
+    if (act === "cancel") { pendingDelete = null; renderMenu(); focusAct(r.recipe_id, "delete"); return; }
     if (act === "confirm") {
       btn.disabled = true;
       try {
@@ -499,13 +528,18 @@
       editing = { rid: r.recipe_id, originals: orig, ingredients, gpp: Number(gpp) || null, portions };
     }
     form.hidden = false;
-    form.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    form.scrollIntoView({ block: "nearest",
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
     $("mf-name").focus();
   }
   function closeMealForm() {
     $("nMealForm").hidden = true;
     editing = null;
+    $("nMealNew").focus();
   }
+  document.addEventListener("input", (ev) => {
+    if (ev.target.matches && ev.target.matches("[aria-invalid]")) ev.target.removeAttribute("aria-invalid");
+  });
   $("nMealNew").addEventListener("click", () => openMealForm(null));
   $("mf-cancel").addEventListener("click", closeMealForm);
 
@@ -514,15 +548,17 @@
     const name = $("mf-name").value.trim();
     const gpp = num($("mf-gpp"));
     const portions = num($("mf-portions"));
-    if (!name) { status("mf-status", "Give the meal a name.", true); return; }
-    if (gpp == null || !(gpp >= 1 && gpp <= 5000)) { status("mf-status", "Grams per portion must be between 1 and 5000.", true); return; }
+    const bad = (id, msg) => { status("mf-status", msg, true); $(id).setAttribute("aria-invalid", "true"); $(id).focus(); };
+    $("nMealForm").querySelectorAll("[aria-invalid]").forEach((el) => el.removeAttribute("aria-invalid"));
+    if (!name) return bad("mf-name", "Give the meal a name.");
+    if (gpp == null || !(gpp >= 1 && gpp <= 5000)) return bad("mf-gpp", "Grams per portion must be between 1 and 5000.");
     if (portions == null || !Number.isInteger(portions) || portions < 1 || portions > 100) {
-      status("mf-status", "Portions must be a whole number from 1 to 100.", true); return;
+      return bad("mf-portions", "Portions must be a whole number from 1 to 100.");
     }
     const per = {};
     for (const el of NUT_INPUTS()) {
       const v = num(el);
-      if (v != null && !(v >= 0)) { status("mf-status", "Nutrient amounts can't be negative.", true); return; }
+      if (v != null && !(v >= 0)) { bad(el.id, "Nutrient amounts can't be negative."); return; }
       const key = el.dataset.nut;
       if (editing) {
         // send only what changed, so untouched imported values keep their precision
@@ -534,7 +570,10 @@
     }
     if (!editing) {
       const missing = ["kcal", "protein_g", "carbs_g", "fat_g"].filter((k) => per[k] == null);
-      if (missing.length) { status("mf-status", "Calories, protein, carbs and fat are required.", true); return; }
+      if (missing.length) {
+        const first = NUT_INPUTS().find((el) => el.dataset.nut === missing[0]);
+        bad(first.id, "Calories, protein, carbs and fat are required."); return;
+      }
     }
     const body = { name, meal_type: $("mf-type").value || null, grams_per_portion: gpp, portions, per_portion: per };
     const lines = $("mf-ingredients").value.split("\n").map((l) => l.trim()).filter(Boolean);

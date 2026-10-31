@@ -110,9 +110,9 @@
     <div class="card" id="nMicroCard">
       <div class="row between wrap mb-1">
         <h3 class="card-title">Micronutrients</h3>
-        <button class="ng-btn" id="nMicroEditBtn" type="button" hidden>Edit targets</button>
+        <button class="ng-btn" id="nMicroEditBtn" type="button" aria-label="Edit micronutrient targets" hidden>Edit targets</button>
       </div>
-      <div class="ng-tiles" id="nMicroChips"><span class="muted micro">Loading…</span></div>
+      <div class="ng-tiles" id="nMicroChips" role="list" aria-label="Daily micronutrient targets"><span class="muted micro">Loading…</span></div>
       <form class="ng-form" id="nMicroForm" hidden novalidate>
         <p class="muted micro m0">Daily targets for all ten nutrients. Every one is needed to calculate your goals.</p>
         <div class="ng-form-grid" id="nMicroFields"></div>
