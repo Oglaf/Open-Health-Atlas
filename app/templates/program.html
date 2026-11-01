@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Program{% endblock %}
+{% block content %}
+{# Program page: today's session, the Mon-Sun plan, and each routine's
+   exercises. Read-only until "Edit program" is pressed; edits post to the
+   validated /api/plans/* endpoints (routine-set, routine-remove,
+   schedule-set). Nothing is computed here - targets and last-session numbers
+   are rendered as the API returns them. #}
+<div class="vstack">
+  <div class="row-top between wrap">
+    <div class="crumb">
+      <a class="back" href="{{ url_for('core.dashboard') }}">◱ Hub</a>
+      <h1 class="page-title">Program</h1>
+      <span class="muted micro">weekly plan · today's session</span>
+    </div>
+    <button id="prog-edit-toggle" class="log-more-btn" type="button" aria-pressed="false" disabled>Edit program</button>
+  </div>
+
+  <p id="prog-status" class="muted note-txt m0" role="status" aria-live="polite">Loading…</p>
+
+  <div class="card" id="prog-today" hidden>
+    <div class="row between wrap">
+      <h3 class="card-title">Today's session</h3>
+      <span class="chip" id="prog-today-name"></span>
+    </div>
+    <div id="prog-today-body" class="vstack gap-2 mt-2"></div>
+  </div>
+
+  <div class="card" id="prog-week" hidden>
+    <h3 class="card-title">Week</h3>
+    <div id="prog-week-grid" class="prog-week mt-2"></div>
+  </div>
+
+  <div id="prog-routines" class="vstack" hidden></div>
+
+  <div class="card" id="prog-new" hidden>
+    <h3 class="card-title">New routine</h3>
+    <p class="muted micro mt-1">A routine is created by its first exercise.</p>
+    <div class="field-row mt-2">
+      <label class="field">Routine name
+        <input id="pn-routine" type="text" maxlength="120" autocomplete="off"></label>
+      <label class="field">First exercise
+        <input id="pn-exercise" type="text" maxlength="120" autocomplete="off"></label>
+    </div>
+    <div class="field-row">
+      <label class="field">Sets
+        <input id="pn-sets" type="number" min="1" max="20" step="1" inputmode="numeric"></label>
+      <label class="field">Reps
+        <input id="pn-reps" type="number" min="1" max="100" step="1" inputmode="numeric"></label>
+      <label class="field">Weight (kg)
+        <input id="pn-weight" type="number" min="0" step="any" inputmode="decimal"></label>
+    </div>
+    <button id="pn-create" class="save-btn" type="button">Create routine</button>
+  </div>
+</div>
+
+<div class="toast-wrap" id="toast-wrap" aria-live="polite"></div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/program.js') }}" defer></script>
+{% endblock %}

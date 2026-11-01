@@ -84,8 +84,10 @@ def plans():
 
 @bp.get("/program")
 def program():
-    """Legacy Program URL; validated plan APIs remain, while the current UI is Body."""
-    return redirect(url_for("core.training"))
+    """Program page: weekly plan, today's session, and an opt-in editor. Reads
+    /api/plans/program + /api/training/today; every edit posts to the existing
+    validated /api/plans/* endpoints (bridge -> health.py)."""
+    return render_template("program.html")
 
 
 @bp.get("/integrations")

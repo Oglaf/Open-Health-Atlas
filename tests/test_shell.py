@@ -24,15 +24,14 @@ def test_dashboard_renders(authed):
     # Plans/Models/Chat/Export left the nav for the Settings drawer.
     for row in ("Wearable sync", "Export", "Vault notes"):
         assert row in html, f"settings drawer row {row} missing from shell"
-    # task-50 item 6 (owner C3): the Program editor UI (page + drawer link)
-    # was removed — /api/plans/* + health.py subcommands stay agent-only.
-    assert "Program</span>" not in html
+    # The Program page (read view + opt-in editor) is a Settings drawer row.
+    assert "Program</span>" in html
     assert "Sign out" in html  # logout control shows for a live session
 
 
 def test_stub_pages_render(authed):
     for path in ("/training", "/nutrition", "/export",
-                 "/vault-notes", "/consistency", "/data", "/models", "/log", "/profile"):
+                 "/vault-notes", "/program", "/consistency", "/data", "/models", "/log", "/profile"):
         r = authed.get(path)
         assert r.status_code == 200, f"{path} did not render"
 
@@ -63,16 +62,12 @@ def test_body_page_has_hevy_import_button(authed):
             < html.index('class="body-overview"'))
 
 
-def test_program_page_removed_redirects_to_training(authed):
-    """task-50 item 6 (owner C3, UI-only removal): the Program & schedule
-    editor page is gone — /program now 302s to /training, the closest
-    surviving page. The editor DOM + program.js must not exist anywhere,
-    and Body must not have picked them back up. The backend
-    (/api/plans/*, bridge, health.py routine subcommands) is untouched —
-    that's covered by tests/test_plans_api.py, not here."""
+def test_program_page_is_its_own_page(authed):
+    """/program is a real page (weekly plan, today's session, opt-in editor).
+    Body stays separate: it must not pick up the Program editor script."""
     r = authed.get("/program")
-    assert r.status_code == 302
-    assert r.headers["Location"].endswith("/training")
+    assert r.status_code == 200
+    assert "js/program.js" in r.get_data(as_text=True)
     body = authed.get("/training").get_data(as_text=True)
     assert "js/program.js" not in body
     assert 'id="program-editor-root"' not in body

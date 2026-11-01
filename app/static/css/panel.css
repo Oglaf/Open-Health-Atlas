@@ -1576,3 +1576,14 @@ table.ltab tr:last-child td { border-bottom: 0; }
 }
 .ng-tile .label { overflow-wrap: anywhere; }
 .ng-form-grid .field input { min-width: 0; font-variant-numeric: tabular-nums; }
+
+/* ---------- Program page ---------- */
+.prog-week { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); }
+.prog-day { border: 1px solid var(--card-edge); border-radius: 10px; padding: 10px; background: var(--bg-elev);
+            display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.prog-day.today { border-color: var(--accent); background: var(--accent-soft); }
+.prog-day-name { font-size: 0.85rem; font-weight: 600; overflow-wrap: anywhere; }
+.prog-ex { display: flex; flex-direction: column; gap: 4px; padding: 6px 0; }
+.prog-ex-main { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.prog-ex.editing { gap: 8px; padding: 10px 0; }
+.prog-ex.editing .field-row { margin-bottom: 0; }
