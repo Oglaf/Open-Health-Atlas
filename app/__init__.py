@@ -27,6 +27,7 @@ NAV = [
     ("core.dashboard", "Dashboard", "dash"),
     ("core.consistency", "Consistency", "consistency"),
     ("core.training", "Body", "training"),
+    ("core.program", "Program", "plans"),
     ("core.nutrition", "Nutrition", "nutrition"),
     ("core.recovery", "Recovery", "recovery"),
     ("core.data", "Data Explorer", "data"),

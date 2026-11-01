@@ -14,7 +14,7 @@ def test_dashboard_renders(authed):
     html = r.get_data(as_text=True)
     assert "OpenHealthAtlas" in html
     # Navigation contract. Order lives in app/__init__.py NAV.
-    for item in ("Dashboard", "Consistency", "Body", "Nutrition",
+    for item in ("Dashboard", "Consistency", "Body", "Program", "Nutrition",
                  "Recovery", "Data Explorer", "Daily log", "Profile &amp; targets"):
         assert item in html, f"nav item {item} missing from shell"
     # Mind, External care, Labs and Insight Explorer were removed from this
@@ -24,8 +24,10 @@ def test_dashboard_renders(authed):
     # Plans/Models/Chat/Export left the nav for the Settings drawer.
     for row in ("Wearable sync", "Export", "Vault notes"):
         assert row in html, f"settings drawer row {row} missing from shell"
-    # The Program page (read view + opt-in editor) is a Settings drawer row.
-    assert "Program</span>" in html
+    # Program is a main-nav pillar next to Body, not a Settings drawer row.
+    assert "Program" in html
+    drawer = html.split('aria-label="Settings"', 1)[1]
+    assert "core.program" not in drawer and "/program" not in drawer
     assert "Sign out" in html  # logout control shows for a live session
 
 
