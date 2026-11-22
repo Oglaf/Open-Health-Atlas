@@ -1,10 +1,21 @@
 # Open Health Atlas
 
+[![source: GitHub](https://img.shields.io/badge/source-GitHub-181717?style=flat-square)](https://github.com/Oglaf/Open-Health-Atlas)
+[![stack: Python + Flask](https://img.shields.io/badge/stack-Python%20%2B%20Flask-2563EB?style=flat-square)](https://github.com/Oglaf/Open-Health-Atlas/tree/main)
+[![license: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-64748B?style=flat-square)](LICENSE)
+
+Local health-records workspace with deterministic calculations, traceable evidence, a Flask dashboard and optional MCP client integration.
+
+## Repository guide
+
+- **Architecture:** The Flask panel, local records, deterministic toolkit and validated write broker have distinct responsibilities. Optional MCP exposes evidence to an external client; local storage does not guarantee that a hosted model processes data locally.
+- **Getting started:** This is Oglaf’s fork: clone `https://github.com/Oglaf/Open-Health-Atlas.git` for these changes, then follow [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) and [docs/TRY_DEMO.md](docs/TRY_DEMO.md). Use supported macOS/Linux with Python 3.11+ and fictional data in isolated directories. Upstream release/demo links below do not claim artifacts built from this fork.
+- **Verification:** Follow [docs/TESTING.md](docs/TESTING.md) for focused tests and complete-suite prerequisites. Verify `python scripts/release_manifest.py verify` after documentation/workflow changes. Never use real health records for tests; report optional dependency skips honestly.
+
 **Explore your health records together—and check the evidence behind the patterns.**
 
 Created by **[Kajeesan Jeevendra](https://github.com/kajeesan)** · [AGPL-3.0 licensed](LICENSE)
 
-[![Repository checks](https://github.com/kajeesan/Open-Health-Atlas/actions/workflows/checks.yml/badge.svg?branch=main)](https://github.com/kajeesan/Open-Health-Atlas/actions/workflows/checks.yml)
 
 Open Health Atlas brings sleep, training, mood, nutrition and other health
 records into one local application. Compare periods and inspect the sources,
@@ -133,3 +144,29 @@ applicable copyright and license notices.
 Third-party components retain their own licenses and credits; see
 [NOTICE](NOTICE), [third-party notices](THIRD_PARTY_NOTICES.md) and
 [research references](REFERENCES.md). Use [CITATION.cff](CITATION.cff) for citation.
+
+## Technology stack
+
+Python + Flask. Use the tracked manifests and platform-specific setup documentation for exact requirements.
+
+## Project structure
+
+- [`app/`](app/)
+- [`toolkit/`](toolkit/)
+- [`desktop/`](desktop/)
+- [`deploy/`](deploy/)
+- [`scripts/`](scripts/)
+- [`tests/`](tests/)
+- [`docs/`](docs/)
+
+## Development workflow
+
+Tracked workflows: [.github/workflows/checks.yml](.github/workflows/checks.yml), [.github/workflows/desktop.yml](.github/workflows/desktop.yml), [.github/workflows/image.yml](.github/workflows/image.yml). Push/pull-request filters skip ordinary Markdown and `docs/`-only changes; code, dependency and workflow changes still follow the original triggers. Manual, scheduled and tag-based behavior is preserved where configured. Packaged muscle-map and licensing inputs still trigger relevant builds. Documentation plus release-inventory-only maintenance is excluded; regenerate and verify that inventory locally before committing.
+
+## Coding standards
+
+Preserve upstream creator attribution and the license boundaries in [LICENSING.md](LICENSING.md). Follow [AGENTS.md](AGENTS.md), keep data fictional, and maintain the release inventory.
+
+## Testing
+
+Follow [docs/TESTING.md](docs/TESTING.md) for focused tests and complete-suite prerequisites. Verify `python scripts/release_manifest.py verify` after documentation/workflow changes. Never use real health records for tests; report optional dependency skips honestly.

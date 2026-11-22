@@ -4,7 +4,49 @@ on:
   push:
     branches: [main, feature/multi-user]
     tags: ['v*']
+    paths:
+    - '**'
+    - '!**/*.md'
+    - '!**/*.mdx'
+    - '!docs/**'
+    - '!LICENSE'
+    - '!LICENSE.*'
+    - '!NOTICE'
+    - '!CHANGELOG'
+    - '!CHANGELOG.*'
+    - '!RELEASE_MANIFEST.tsv'
+    - '**/SKILL.md'
+    - '**/AGENTS.md'
+    - '**/AGENTS.override.md'
+    - '**/CLAUDE.md'
+    - docs/authored-submuscle-map.md
+    - docs/LICENSE-MIT.md
+    - LICENSE
+    - LICENSING.md
+    - NOTICE
+    - THIRD_PARTY_NOTICES.md
   pull_request:
+    paths:
+    - '**'
+    - '!**/*.md'
+    - '!**/*.mdx'
+    - '!docs/**'
+    - '!LICENSE'
+    - '!LICENSE.*'
+    - '!NOTICE'
+    - '!CHANGELOG'
+    - '!CHANGELOG.*'
+    - '!RELEASE_MANIFEST.tsv'
+    - '**/SKILL.md'
+    - '**/AGENTS.md'
+    - '**/AGENTS.override.md'
+    - '**/CLAUDE.md'
+    - docs/authored-submuscle-map.md
+    - docs/LICENSE-MIT.md
+    - LICENSE
+    - LICENSING.md
+    - NOTICE
+    - THIRD_PARTY_NOTICES.md
   workflow_dispatch:
 
 permissions:
